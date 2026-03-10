@@ -30,11 +30,6 @@ type pluginConfig struct {
 // targetConfig holds per-policy configuration for the OVH target plugin.
 // These are set in the scaling policy and may vary between policies.
 type targetConfig struct {
-	// GroupID is a label used to identify servers belonging to this scaling
-	// group. Servers are tagged with this value so the plugin can filter
-	// which OVH dedicated servers belong to the autoscaled pool.
-	GroupID string
-
 	// Datacenter is the OVH datacenter where new servers should be
 	// provisioned (e.g. "gra3", "bhs8", "sgp1").
 	Datacenter string
@@ -74,7 +69,6 @@ const (
 
 // Per-policy config keys.
 const (
-	configKeyGroupID     = "ovh_group_id"
 	configKeyDatacenter  = "ovh_datacenter"
 	configKeyPlanCode    = "ovh_plan_code"
 	configKeyOSTemplate  = "ovh_os_template"
@@ -106,7 +100,6 @@ func (c *pluginConfig) parse(config map[string]string) error {
 
 func parseTargetConfig(config map[string]string) (*targetConfig, error) {
 	tc := &targetConfig{
-		GroupID:     getConfigValue(config, configKeyGroupID, ""),
 		Datacenter:  getConfigValue(config, configKeyDatacenter, ""),
 		PlanCode:    getConfigValue(config, configKeyPlanCode, ""),
 		OSTemplate:  getConfigValue(config, configKeyOSTemplate, configValueOSTemplateDefault),
@@ -115,9 +108,6 @@ func parseTargetConfig(config map[string]string) (*targetConfig, error) {
 		ProductType: getConfigValue(config, configKeyProductType, configValueProductTypeDefault),
 	}
 
-	if tc.GroupID == "" {
-		return nil, fmt.Errorf("required config param %s not found", configKeyGroupID)
-	}
 
 	return tc, nil
 }

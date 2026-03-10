@@ -73,7 +73,11 @@ func (t *TargetPlugin) scaleIn(ctx context.Context, num int64, config map[string
 	if len(failures) > 0 {
 		t.logger.Warn("partial scale-in",
 			"success_num", len(successes), "failed_num", len(failures))
-		return failedTaskErr
+		if failedTaskErr != nil {
+			return failedTaskErr
+		}
+		return fmt.Errorf("partial scale-in: %d of %d nodes failed to terminate",
+			len(failures), len(successes)+len(failures))
 	}
 	return nil
 }
@@ -96,7 +100,6 @@ func (t *TargetPlugin) scaleOut(ctx context.Context, num int64, cfg *targetConfi
 		t.logger.Info("ordering new OVH dedicated server",
 			"plan_code", cfg.PlanCode,
 			"datacenter", cfg.Datacenter,
-			"group_id", cfg.GroupID,
 			"count", fmt.Sprintf("%d/%d", i+1, num),
 		)
 

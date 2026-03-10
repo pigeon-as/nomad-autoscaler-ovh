@@ -53,7 +53,6 @@ check "allocated_cpu" {
     node_drain_deadline    = "15m"
     node_purge             = "true"
     node_selector_strategy = "least_busy"
-    ovh_group_id           = "workers-gra"
     ovh_datacenter         = "gra3"
     ovh_plan_code          = "24adv-1"
     ovh_os_template        = "debian12_64"
@@ -66,7 +65,6 @@ check "allocated_cpu" {
 
 | Key | Default | Description |
 |-----|---------|-------------|
-| `ovh_group_id` | required | Scaling group identifier passed to OVH orders for tracking |
 | `ovh_datacenter` | `""` | OVH datacenter for new orders (e.g. `gra3`, `bhs8`). Required for scale-out |
 | `ovh_plan_code` | `""` | OVH plan code for new servers (e.g. `24adv-1`). Required for scale-out |
 | `ovh_os_template` | `debian12_64` | OS template for server installation |

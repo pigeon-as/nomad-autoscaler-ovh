@@ -130,7 +130,6 @@ func (t *TargetPlugin) Scale(action sdk.ScalingAction, config map[string]string)
 		err = t.scaleOut(ctx, num, targetCfg)
 	default:
 		t.logger.Info("scaling not required",
-			"group_id", targetCfg.GroupID,
 			"current_count", count,
 			"strategy_count", action.Count,
 		)

@@ -109,19 +109,9 @@ func TestParseTargetConfig(t *testing.T) {
 		check   func(*testing.T, *targetConfig)
 	}{
 		{
-			name:    "missing group_id",
-			config:  map[string]string{},
-			wantErr: true,
-		},
-		{
-			name: "group_id only",
-			config: map[string]string{
-				"ovh_group_id": "pool-1",
-			},
+			name: "empty config uses defaults",
+			config: map[string]string{},
 			check: func(t *testing.T, tc *targetConfig) {
-				if tc.GroupID != "pool-1" {
-					t.Errorf("GroupID = %q, want %q", tc.GroupID, "pool-1")
-				}
 				if tc.OSTemplate != configValueOSTemplateDefault {
 					t.Errorf("OSTemplate = %q, want default %q", tc.OSTemplate, configValueOSTemplateDefault)
 				}
@@ -133,7 +123,6 @@ func TestParseTargetConfig(t *testing.T) {
 		{
 			name: "all fields",
 			config: map[string]string{
-				"ovh_group_id":     "pool-2",
 				"ovh_datacenter":   "gra3",
 				"ovh_plan_code":    "24sk10",
 				"ovh_os_template":  "ubuntu2204_64",
@@ -142,9 +131,6 @@ func TestParseTargetConfig(t *testing.T) {
 				"ovh_product_type": "baremetalServers",
 			},
 			check: func(t *testing.T, tc *targetConfig) {
-				if tc.GroupID != "pool-2" {
-					t.Errorf("GroupID = %q", tc.GroupID)
-				}
 				if tc.Datacenter != "gra3" {
 					t.Errorf("Datacenter = %q", tc.Datacenter)
 				}

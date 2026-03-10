@@ -20,14 +20,11 @@ import (
 	"github.com/shoenig/test/must"
 )
 
-const groupID = "e2e-autoscaler"
-
 var requiredEnv = []string{
 	"OVH_APPLICATION_KEY",
 	"OVH_APPLICATION_SECRET",
 	"OVH_CONSUMER_KEY",
 	"E2E_PLAN_CODE",
-	"E2E_REVERSE_DOMAIN",
 }
 
 func TestMain(m *testing.M) {
@@ -37,40 +34,7 @@ func TestMain(m *testing.M) {
 			os.Exit(1)
 		}
 	}
-
-	// Clean up any servers left over from a previous run.
-	cleanupGroup()
-
-	code := m.Run()
-
-	cleanupGroup()
-	os.Exit(code)
-}
-
-// cleanupGroup terminates all OVH servers in the e2e group. Best-effort;
-// errors are logged to stderr so setup/teardown doesn't mask test failures.
-func cleanupGroup() {
-	p, err := newPlugin()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "cleanup: plugin init failed: %v\n", err)
-		return
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Minute)
-	defer cancel()
-
-	names, err := p.ListGroupServers(ctx, groupID)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "cleanup: list servers failed: %v\n", err)
-		return
-	}
-
-	for _, name := range names {
-		fmt.Fprintf(os.Stderr, "cleanup: terminating %s\n", name)
-		if err := p.TerminateServer(ctx, name); err != nil {
-			fmt.Fprintf(os.Stderr, "cleanup: failed to terminate %s: %v\n", name, err)
-		}
-	}
+	os.Exit(m.Run())
 }
 
 // --- helpers ---
@@ -86,7 +50,6 @@ func newPlugin() (*plugin.TargetPlugin, error) {
 		"ovh_consumer_key":       os.Getenv("OVH_CONSUMER_KEY"),
 		"ovh_endpoint":           envOrDefault("OVH_ENDPOINT", "ovh-eu"),
 		"ovh_subsidiary":         envOrDefault("OVH_SUBSIDIARY", "FR"),
-		"ovh_reverse_domain":     os.Getenv("E2E_REVERSE_DOMAIN"),
 	})
 	return p, err
 }
@@ -100,7 +63,6 @@ func setupPlugin(t *testing.T) *plugin.TargetPlugin {
 
 func policyConfig() map[string]string {
 	return map[string]string{
-		"ovh_group_id":    groupID,
 		"ovh_datacenter":  envOrDefault("E2E_DATACENTER", "gra3"),
 		"ovh_plan_code":   os.Getenv("E2E_PLAN_CODE"),
 		"ovh_os_template": envOrDefault("E2E_OS_TEMPLATE", "debian12_64"),
@@ -113,6 +75,26 @@ func envOrDefault(key, def string) string {
 		return v
 	}
 	return def
+}
+
+// newServiceNames returns service names that appeared after a scale operation
+// by diffing the current list against a baseline snapshot.
+func newServiceNames(p *plugin.TargetPlugin, before []string) ([]string, error) {
+	after, err := p.ListServiceNames()
+	if err != nil {
+		return nil, err
+	}
+	known := make(map[string]bool, len(before))
+	for _, n := range before {
+		known[n] = true
+	}
+	var added []string
+	for _, n := range after {
+		if !known[n] {
+			added = append(added, n)
+		}
+	}
+	return added, nil
 }
 
 // --- tests ---
@@ -129,9 +111,8 @@ func TestStatus(t *testing.T) {
 	must.Eq(t, int64(0), status.Count)
 }
 
-// TestScaleLifecycle orders the cheapest Eco server, verifies delivery
-// and reverse DNS, then terminates it. This test incurs real OVH costs
-// and takes 20-60 minutes.
+// TestScaleLifecycle orders the cheapest Eco server, verifies delivery,
+// then terminates it. This test incurs real OVH costs and takes 20-60 minutes.
 func TestScaleLifecycle(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping long-running scale lifecycle test")
@@ -141,14 +122,17 @@ func TestScaleLifecycle(t *testing.T) {
 	cfg := policyConfig()
 	ctx := context.Background()
 
-	// Safety-net cleanup: terminate any remaining servers in the e2e group
-	// even if the test panics or is killed.
+	// Snapshot service names before ordering so we can diff afterward.
+	before, err := p.ListServiceNames()
+	must.NoError(t, err)
+
+	// Safety-net cleanup: terminate any servers added during this test.
 	t.Cleanup(func() {
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), 60*time.Minute)
 		defer cancel()
 
-		names, _ := p.ListGroupServers(cleanupCtx, groupID)
-		for _, name := range names {
+		added, _ := newServiceNames(p, before)
+		for _, name := range added {
 			t.Logf("cleanup: terminating %s", name)
 			p.TerminateServer(cleanupCtx, name) //nolint:errcheck
 		}
@@ -156,14 +140,14 @@ func TestScaleLifecycle(t *testing.T) {
 
 	// 1. Scale out: order 1 server.
 	t.Log("ordering server (this takes 10-40 minutes)...")
-	err := p.Scale(sdk.ScalingAction{Count: 1}, cfg)
+	err = p.Scale(sdk.ScalingAction{Count: 1}, cfg)
 	must.NoError(t, err)
 
-	// 2. Verify server appeared in the group via reverse DNS.
-	names, err := p.ListGroupServers(ctx, groupID)
+	// 2. Verify a new service name appeared.
+	added, err := newServiceNames(p, before)
 	must.NoError(t, err)
-	must.Eq(t, 1, len(names))
-	t.Logf("server delivered: %s", names[0])
+	must.Eq(t, 1, len(added))
+	t.Logf("server delivered: %s", added[0])
 
 	// 3. Status should reflect the new server.
 	status, err := p.Status(cfg)
@@ -172,7 +156,7 @@ func TestScaleLifecycle(t *testing.T) {
 
 	// 4. Terminate the server.
 	t.Log("terminating server (this takes 1-10 minutes)...")
-	err = p.TerminateServer(ctx, names[0])
+	err = p.TerminateServer(ctx, added[0])
 	must.NoError(t, err)
-	t.Logf("server terminated: %s", names[0])
+	t.Logf("server terminated: %s", added[0])
 }
