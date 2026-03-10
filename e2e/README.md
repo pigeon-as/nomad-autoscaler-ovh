@@ -19,7 +19,6 @@ autoscaler plugin with a real OVH API account.
 | `OVH_APPLICATION_SECRET` | Yes | | OVH API application secret |
 | `OVH_CONSUMER_KEY` | Yes | | OVH API consumer key |
 | `E2E_PLAN_CODE` | Yes | | Eco server plan code (e.g. `25skleb01`) |
-| `E2E_REVERSE_DOMAIN` | Yes | | Domain suffix for reverse DNS (e.g. `infra.example.com`) |
 | `OVH_ENDPOINT` | No | `ovh-eu` | OVH API endpoint |
 | `OVH_SUBSIDIARY` | No | `FR` | OVH subsidiary for ordering |
 | `E2E_DATACENTER` | No | `gra3` | OVH datacenter for new servers |
@@ -40,7 +39,6 @@ export OVH_APPLICATION_KEY="..."
 export OVH_APPLICATION_SECRET="..."
 export OVH_CONSUMER_KEY="..."
 export E2E_PLAN_CODE="25skleb01"
-export E2E_REVERSE_DOMAIN="infra.example.com"
 make e2e
 ```
 

@@ -100,10 +100,12 @@ func newServiceNames(p *plugin.TargetPlugin, before []string) ([]string, error) 
 // --- tests ---
 
 // TestStatus verifies the plugin connects to Nomad and OVH and returns
-// a valid status for an empty scaling group.
+// a valid status. Uses a non-existent node_pool so count is 0 regardless
+// of whether a Nomad dev agent is running.
 func TestStatus(t *testing.T) {
 	p := setupPlugin(t)
 	cfg := policyConfig()
+	cfg["node_pool"] = "e2e-nonexistent"
 
 	status, err := p.Status(cfg)
 	must.NoError(t, err)
@@ -149,12 +151,11 @@ func TestScaleLifecycle(t *testing.T) {
 	must.Eq(t, 1, len(added))
 	t.Logf("server delivered: %s", added[0])
 
-	// 3. Status should reflect the new server.
-	status, err := p.Status(cfg)
-	must.NoError(t, err)
-	must.Eq(t, int64(1), status.Count)
+	// Note: we don't assert on Status().Count here because the ordered
+	// server hasn't joined Nomad (no ovh_user_data bootstrap in e2e).
+	// The OVH service-name diff above is the delivery verification.
 
-	// 4. Terminate the server.
+	// 3. Terminate the server.
 	t.Log("terminating server (this takes 1-10 minutes)...")
 	err = p.TerminateServer(ctx, added[0])
 	must.NoError(t, err)
