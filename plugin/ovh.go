@@ -82,9 +82,9 @@ type reinstallOpts struct {
 }
 
 type reinstallCustomize struct {
-	Hostname            *string `json:"hostname,omitempty"`
-	SshKey              *string `json:"sshKey,omitempty"`
-	ConfigDriveUserData *string `json:"configDriveUserData,omitempty"`
+	Hostname               *string `json:"hostname,omitempty"`
+	SshKey                 *string `json:"sshKey,omitempty"`
+	PostInstallationScript *string `json:"postInstallationScript,omitempty"`
 }
 
 // Notification email types (used for termination confirmation).
@@ -353,7 +353,7 @@ func (t *TargetPlugin) reinstallServer(ctx context.Context, serviceName string, 
 		opts.Customizations.SshKey = &cfg.SSHKey
 	}
 	if cfg.UserData != "" {
-		opts.Customizations.ConfigDriveUserData = &cfg.UserData
+		opts.Customizations.PostInstallationScript = &cfg.UserData
 	}
 
 	task := &ovhTask{}

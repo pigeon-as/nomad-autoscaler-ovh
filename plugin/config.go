@@ -47,9 +47,10 @@ type targetConfig struct {
 	// not a key name.
 	SSHKey string
 
-	// UserData is an optional cloud-init user data script to run on new
-	// servers during installation. Used to bootstrap the server into the
-	// WireGuard mesh and Nomad cluster.
+	// UserData is the base64-encoded post-installation script to run on new
+	// servers during OS installation. Used to bootstrap the server into the
+	// WireGuard mesh and Nomad cluster. Passed to the OVH API as
+	// customizations.postInstallationScript.
 	UserData string
 
 	// ProductType is the OVH order cart product type (e.g. "eco",
@@ -107,7 +108,6 @@ func parseTargetConfig(config map[string]string) (*targetConfig, error) {
 		UserData:    getConfigValue(config, configKeyUserData, ""),
 		ProductType: getConfigValue(config, configKeyProductType, configValueProductTypeDefault),
 	}
-
 
 	return tc, nil
 }
