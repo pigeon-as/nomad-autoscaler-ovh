@@ -1,5 +1,7 @@
 # nomad-autoscaler-ovh
 
+> **Work in progress.** Don't expect anything from this plugin at the moment. It's experimental and work in progress.
+
 Nomad Autoscaler [target plugin](https://developer.hashicorp.com/nomad/tools/autoscaling/plugins/target) for horizontal cluster scaling via [OVH dedicated servers](https://eu.api.ovh.com/console/).
 
 Orders new servers when cluster resources are exhausted, terminates idle servers on scale-in. Servers are identified by Nomad node attributes (`unique.platform.ovh.service_name`) and joined to the cluster via ConfigDrive userdata.
