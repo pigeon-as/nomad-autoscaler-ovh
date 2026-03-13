@@ -15,7 +15,7 @@ vet:
 fmt:
 	gofmt -s -w .
 
-e2e:
+e2e: build
 	go test -tags=e2e -v -count=1 -timeout=120m ./e2e
 
 dev:

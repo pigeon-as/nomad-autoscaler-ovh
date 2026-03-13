@@ -22,7 +22,7 @@ func (t *TargetPlugin) scaleIn(ctx context.Context, num int64, config map[string
 	// GET /dedicated/server — flat list of all service names on the account.
 	// Used as remoteIDs whitelist so RunPreScaleInTasksWithRemoteCheck only
 	// considers Nomad nodes whose OVH server still exists.
-	remoteIDs, err := t.listServiceNames()
+	remoteIDs, err := t.listServiceNames(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to list OVH service names: %v", err)
 	}
@@ -84,26 +84,24 @@ func (t *TargetPlugin) scaleIn(ctx context.Context, num int64, config map[string
 
 // scaleOut orders num new OVH dedicated servers.
 //
-// NOTE: OVH dedicated server delivery takes 2–10 minutes. The autoscaler
-// policy MUST use a long cooldown (e.g. cooldown = "15m") to avoid
-// re-triggering while waiting for delivery.
-func (t *TargetPlugin) scaleOut(ctx context.Context, num int64, cfg *targetConfig) error {
-	// Validate required target config for provisioning.
-	if cfg.PlanCode == "" {
-		return fmt.Errorf("required config param %s not found for scale out", configKeyPlanCode)
-	}
-	if cfg.Datacenter == "" {
-		return fmt.Errorf("required config param %s not found for scale out", configKeyDatacenter)
-	}
+// OVH dedicated server delivery takes 2–10 minutes. The autoscaler policy
+// MUST use an adequate cooldown (e.g. cooldown = "15m") to prevent
+// re-triggering while servers are being delivered and joining the cluster.
+// Unlike AWS ASG/Azure VMSS/GCE MIG, OVH has no provider-side "desired count"
+// that updates instantly, so the policy cooldown is the only mechanism
+// preventing double-ordering.
+func (t *TargetPlugin) scaleOut(ctx context.Context, num int64, config map[string]string) error {
+	planCode := getConfigValue(config, configKeyPlanCode, "")
+	datacenter := getConfigValue(config, configKeyDatacenter, "")
 
 	for i := int64(0); i < num; i++ {
 		t.logger.Info("ordering new OVH dedicated server",
-			"plan_code", cfg.PlanCode,
-			"datacenter", cfg.Datacenter,
+			"plan_code", planCode,
+			"datacenter", datacenter,
 			"count", fmt.Sprintf("%d/%d", i+1, num),
 		)
 
-		if err := t.orderServer(ctx, cfg); err != nil {
+		if err := t.orderServer(ctx, config); err != nil {
 			return fmt.Errorf("failed to order OVH server: %v", err)
 		}
 	}

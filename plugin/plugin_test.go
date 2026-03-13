@@ -101,83 +101,37 @@ func TestOvhNodeIDMap(t *testing.T) {
 	}
 }
 
-func TestParseTargetConfig(t *testing.T) {
+func TestGetConfigValue(t *testing.T) {
 	tests := []struct {
-		name    string
-		config  map[string]string
-		wantErr bool
-		check   func(*testing.T, *targetConfig)
+		name     string
+		config   map[string]string
+		key      string
+		default_ string
+		want     string
 	}{
-		{
-			name: "empty config uses defaults",
-			config: map[string]string{},
-			check: func(t *testing.T, tc *targetConfig) {
-				if tc.OSTemplate != configValueOSTemplateDefault {
-					t.Errorf("OSTemplate = %q, want default %q", tc.OSTemplate, configValueOSTemplateDefault)
-				}
-				if tc.ProductType != configValueProductTypeDefault {
-					t.Errorf("ProductType = %q, want default %q", tc.ProductType, configValueProductTypeDefault)
-				}
-			},
-		},
-		{
-			name: "all fields",
-			config: map[string]string{
-				"ovh_datacenter":   "gra3",
-				"ovh_plan_code":    "24sk10",
-				"ovh_os_template":  "ubuntu2204_64",
-				"ovh_ssh_key":      "ssh-ed25519 AAAA...",
-				"ovh_user_data":    "#!/bin/bash\necho hi",
-				"ovh_product_type": "baremetalServers",
-			},
-			check: func(t *testing.T, tc *targetConfig) {
-				if tc.Datacenter != "gra3" {
-					t.Errorf("Datacenter = %q", tc.Datacenter)
-				}
-				if tc.PlanCode != "24sk10" {
-					t.Errorf("PlanCode = %q", tc.PlanCode)
-				}
-				if tc.OSTemplate != "ubuntu2204_64" {
-					t.Errorf("OSTemplate = %q", tc.OSTemplate)
-				}
-				if tc.SSHKey != "ssh-ed25519 AAAA..." {
-					t.Errorf("SSHKey = %q", tc.SSHKey)
-				}
-				if tc.UserData != "#!/bin/bash\necho hi" {
-					t.Errorf("UserData = %q", tc.UserData)
-				}
-				if tc.ProductType != "baremetalServers" {
-					t.Errorf("ProductType = %q", tc.ProductType)
-				}
-			},
-		},
+		{"present key", map[string]string{"k": "v"}, "k", "d", "v"},
+		{"missing key uses default", map[string]string{}, "k", "d", "d"},
+		{"empty value returned as-is", map[string]string{"k": ""}, "k", "d", ""},
+		{"os_template default", map[string]string{}, configKeyOSTemplate, configValueOSTemplateDefault, configValueOSTemplateDefault},
+		{"product_type default", map[string]string{}, configKeyProductType, configValueProductTypeDefault, configValueProductTypeDefault},
+		{"endpoint default", map[string]string{}, configKeyEndpoint, configValueEndpointDefault, configValueEndpointDefault},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tc, err := parseTargetConfig(tt.config)
-			if tt.wantErr {
-				if err == nil {
-					t.Fatal("expected error, got nil")
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if tt.check != nil {
-				tt.check(t, tc)
+			got := getConfigValue(tt.config, tt.key, tt.default_)
+			if got != tt.want {
+				t.Errorf("got %q, want %q", got, tt.want)
 			}
 		})
 	}
 }
 
-func TestPluginConfig_parse(t *testing.T) {
+func TestValidatePluginConfig(t *testing.T) {
 	tests := []struct {
 		name    string
 		config  map[string]string
 		wantErr bool
-		check   func(*testing.T, *pluginConfig)
 	}{
 		{
 			name:    "missing required keys",
@@ -198,17 +152,9 @@ func TestPluginConfig_parse(t *testing.T) {
 				"ovh_application_secret": "as",
 				"ovh_consumer_key":       "ck",
 			},
-			check: func(t *testing.T, pc *pluginConfig) {
-				if pc.Endpoint != configValueEndpointDefault {
-					t.Errorf("Endpoint = %q, want default %q", pc.Endpoint, configValueEndpointDefault)
-				}
-				if pc.OvhSubsidiary != "" {
-					t.Errorf("OvhSubsidiary = %q, want empty (auto-detect)", pc.OvhSubsidiary)
-				}
-			},
 		},
 		{
-			name: "custom endpoint and subsidiary",
+			name: "all keys with extras",
 			config: map[string]string{
 				"ovh_application_key":    "ak",
 				"ovh_application_secret": "as",
@@ -216,21 +162,12 @@ func TestPluginConfig_parse(t *testing.T) {
 				"ovh_endpoint":           "ovh-ca",
 				"ovh_subsidiary":         "CA",
 			},
-			check: func(t *testing.T, pc *pluginConfig) {
-				if pc.Endpoint != "ovh-ca" {
-					t.Errorf("Endpoint = %q", pc.Endpoint)
-				}
-				if pc.OvhSubsidiary != "CA" {
-					t.Errorf("OvhSubsidiary = %q", pc.OvhSubsidiary)
-				}
-			},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			pc := &pluginConfig{}
-			err := pc.parse(tt.config)
+			err := validatePluginConfig(tt.config)
 			if tt.wantErr {
 				if err == nil {
 					t.Fatal("expected error, got nil")
@@ -239,9 +176,6 @@ func TestPluginConfig_parse(t *testing.T) {
 			}
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
-			}
-			if tt.check != nil {
-				tt.check(t, pc)
 			}
 		})
 	}

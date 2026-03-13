@@ -34,7 +34,7 @@ var _ target.Target = (*TargetPlugin)(nil)
 // TargetPlugin is the OVH Dedicated Server implementation of the
 // target.Target interface.
 type TargetPlugin struct {
-	config pluginConfig
+	config map[string]string
 	logger hclog.Logger
 	ovh    *ovh.Client
 	nomad  *nomadapi.Client
@@ -54,9 +54,9 @@ func NewOVHDedicatedPlugin(log hclog.Logger) *TargetPlugin {
 
 // SetConfig satisfies the SetConfig function on the base.Base interface.
 func (t *TargetPlugin) SetConfig(config map[string]string) error {
-	t.config = pluginConfig{}
+	t.config = config
 
-	if err := t.config.parse(config); err != nil {
+	if err := validatePluginConfig(config); err != nil {
 		return fmt.Errorf("failed to parse OVH plugin config: %v", err)
 	}
 
@@ -68,12 +68,13 @@ func (t *TargetPlugin) SetConfig(config map[string]string) error {
 
 	// Auto-detect subsidiary from account profile if not configured,
 	// matching the Terraform OVH provider pattern.
-	if t.config.OvhSubsidiary == "" {
-		sub, err := t.fetchSubsidiary()
+	if getConfigValue(config, configKeyOvhSubsidiary, "") == "" {
+		ctx := context.Background()
+		sub, err := t.fetchSubsidiary(ctx)
 		if err != nil {
 			return fmt.Errorf("failed to auto-detect OVH subsidiary: %v", err)
 		}
-		t.config.OvhSubsidiary = sub
+		t.config[configKeyOvhSubsidiary] = sub
 		t.logger.Info("auto-detected OVH subsidiary", "subsidiary", sub)
 	}
 
@@ -111,11 +112,6 @@ func (t *TargetPlugin) Scale(action sdk.ScalingAction, config map[string]string)
 
 	ctx := context.Background()
 
-	targetCfg, err := parseTargetConfig(config)
-	if err != nil {
-		return fmt.Errorf("failed to parse OVH target config: %v", err)
-	}
-
 	count, err := t.countPoolNodes(config)
 	if err != nil {
 		return fmt.Errorf("failed to count pool nodes: %v", err)
@@ -127,7 +123,15 @@ func (t *TargetPlugin) Scale(action sdk.ScalingAction, config map[string]string)
 	case "in":
 		err = t.scaleIn(ctx, num, config)
 	case "out":
-		err = t.scaleOut(ctx, num, targetCfg)
+		// Validate required per-policy config for provisioning, matching
+		// how AWS validates aws_asg_name at the top of Scale.
+		if getConfigValue(config, configKeyPlanCode, "") == "" {
+			return fmt.Errorf("required config param %s not found", configKeyPlanCode)
+		}
+		if getConfigValue(config, configKeyDatacenter, "") == "" {
+			return fmt.Errorf("required config param %s not found", configKeyDatacenter)
+		}
+		err = t.scaleOut(ctx, num, config)
 	default:
 		t.logger.Info("scaling not required",
 			"current_count", count,
