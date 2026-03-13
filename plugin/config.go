@@ -14,22 +14,24 @@ const (
 	configKeyOvhSubsidiary     = "ovh_subsidiary"
 )
 
-// Per-policy config keys.
+// Per-policy config keys. Names align with the Terraform OVH provider's
+// snake_case attribute names for the reinstall customizations block.
 const (
-	configKeyDatacenter        = "ovh_datacenter"
-	configKeyPlanCode          = "ovh_plan_code"
-	configKeyOSTemplate        = "ovh_os_template"
-	configKeySSHKey            = "ovh_ssh_key"
-	configKeyPostInstallScript = "ovh_post_install_script"
-	configKeyUserDataFile      = "ovh_user_data_file"
-	configKeyProductType       = "ovh_product_type"
+	configKeyDatacenter              = "ovh_datacenter"
+	configKeyPlanCode                = "ovh_plan_code"
+	configKeyOperatingSystem         = "ovh_operating_system"
+	configKeySSHKey                  = "ovh_ssh_key"
+	configKeyPostInstallationScript  = "ovh_post_installation_script"
+	configKeyConfigDriveUserData     = "ovh_config_drive_user_data"
+	configKeyConfigDriveUserDataFile = "ovh_config_drive_user_data_file"
+	configKeyProductType             = "ovh_product_type"
 )
 
 // Default values.
 const (
-	configValueEndpointDefault    = "ovh-eu"
-	configValueOSTemplateDefault  = "debian12_64"
-	configValueProductTypeDefault = "eco"
+	configValueEndpointDefault          = "ovh-eu"
+	configValueOperatingSystemDefault   = "debian12_64"
+	configValueProductTypeDefault       = "eco"
 )
 
 // validatePluginConfig checks that required agent-level OVH credentials

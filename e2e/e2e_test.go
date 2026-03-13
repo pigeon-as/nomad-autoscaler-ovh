@@ -199,7 +199,7 @@ func writeLifecyclePolicy(dir string) error {
       node_class           = "ovh-e2e"
       ovh_datacenter       = %q
       ovh_plan_code        = %q
-      ovh_os_template      = %q
+      ovh_operating_system  = %q
       ovh_product_type     = %q
     }
   }

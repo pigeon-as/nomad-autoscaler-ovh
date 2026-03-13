@@ -337,9 +337,9 @@ func (t *TargetPlugin) serviceNameFromOrder(ctx context.Context, orderID int64, 
 
 // reinstallServer triggers OS reinstallation and waits for completion.
 func (t *TargetPlugin) reinstallServer(ctx context.Context, serviceName string, config map[string]string) error {
-	osTemplate := getConfigValue(config, configKeyOSTemplate, configValueOSTemplateDefault)
+	os_ := getConfigValue(config, configKeyOperatingSystem, configValueOperatingSystemDefault)
 	opts := &reinstallOpts{
-		Os: osTemplate,
+		Os: os_,
 	}
 
 	// Add customizations if any are configured.
@@ -351,13 +351,17 @@ func (t *TargetPlugin) reinstallServer(ctx context.Context, serviceName string, 
 	if sshKey := getConfigValue(config, configKeySSHKey, ""); sshKey != "" {
 		opts.Customizations.SshKey = &sshKey
 	}
-	if script := getConfigValue(config, configKeyPostInstallScript, ""); script != "" {
+	if script := getConfigValue(config, configKeyPostInstallationScript, ""); script != "" {
 		opts.Customizations.PostInstallationScript = &script
 	}
-	if userDataFile := getConfigValue(config, configKeyUserDataFile, ""); userDataFile != "" {
+
+	// ConfigDrive userdata: inline value takes precedence over file path.
+	if userData := getConfigValue(config, configKeyConfigDriveUserData, ""); userData != "" {
+		opts.Customizations.ConfigDriveUserData = &userData
+	} else if userDataFile := getConfigValue(config, configKeyConfigDriveUserDataFile, ""); userDataFile != "" {
 		data, err := os.ReadFile(userDataFile)
 		if err != nil {
-			return fmt.Errorf("reading user data file %s: %v", userDataFile, err)
+			return fmt.Errorf("reading config drive user data file %s: %v", userDataFile, err)
 		}
 		s := string(data)
 		opts.Customizations.ConfigDriveUserData = &s
@@ -379,7 +383,7 @@ func (t *TargetPlugin) reinstallServer(ctx context.Context, serviceName string, 
 	t.logger.Info("reinstall task created",
 		"service_name", serviceName,
 		"task_id", task.Id,
-		"os", osTemplate,
+		"os", os_,
 	)
 
 	return t.waitForTask(ctx, serviceName, task.Id)

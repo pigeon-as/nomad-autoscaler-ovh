@@ -49,17 +49,17 @@ check "allocated_cpu" {
   }
 
   target "ovh-dedicated" {
-    node_pool                = "default"
-    node_drain_deadline      = "15m"
-    node_purge               = "true"
-    node_selector_strategy   = "least_busy"
-    ovh_datacenter           = "gra3"
-    ovh_plan_code            = "24adv-1"
-    ovh_os_template          = "debian12_64"
-    ovh_ssh_key              = "ssh-ed25519 AAAA..."
-    ovh_user_data_file       = "/etc/pigeon/worker-userdata.sh"
-    ovh_post_install_script  = "https://example.com/bootstrap.sh"
-    ovh_product_type         = "eco"
+    node_pool                      = "default"
+    node_drain_deadline            = "15m"
+    node_purge                     = "true"
+    node_selector_strategy         = "least_busy"
+    ovh_datacenter                 = "gra3"
+    ovh_plan_code                  = "24adv-1"
+    ovh_operating_system           = "debian12_64"
+    ovh_ssh_key                    = "ssh-ed25519 AAAA..."
+    ovh_config_drive_user_data_file = "/etc/pigeon/worker-userdata.sh"
+    ovh_post_installation_script   = "https://example.com/bootstrap.sh"
+    ovh_product_type               = "eco"
   }
 }
 ```
@@ -68,10 +68,11 @@ check "allocated_cpu" {
 |-----|---------|-------------|
 | `ovh_datacenter` | `""` | OVH datacenter for new orders (e.g. `gra3`, `bhs8`). Required for scale-out |
 | `ovh_plan_code` | `""` | OVH plan code for new servers (e.g. `24adv-1`). Required for scale-out |
-| `ovh_os_template` | `debian12_64` | OS template for server installation |
+| `ovh_operating_system` | `debian12_64` | OS template name (e.g. `debian12_64`, `byolinux_64`) |
 | `ovh_ssh_key` | `""` | SSH public key content for server installation |
-| `ovh_user_data_file` | `""` | Path to a file containing ConfigDrive userdata for server bootstrap |
-| `ovh_post_install_script` | `""` | URL to a post-installation script run after OS install |
+| `ovh_config_drive_user_data` | `""` | Inline ConfigDrive userdata (cloud-init). Takes precedence over `_file` |
+| `ovh_config_drive_user_data_file` | `""` | Path to a ConfigDrive userdata file. Read at scale-out time |
+| `ovh_post_installation_script` | `""` | URL to a post-installation script run during OVH's install phase |
 | `ovh_product_type` | `eco` | OVH cart product type (`eco`, `baremetalServers`) |
 | `datacenter` | `""` | Nomad client datacenter filter |
 | `node_class` | `""` | Nomad client node class filter |
