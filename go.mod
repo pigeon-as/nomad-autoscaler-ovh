@@ -7,6 +7,7 @@ require (
 	github.com/hashicorp/nomad-autoscaler v0.4.5
 	github.com/hashicorp/nomad/api v0.0.0-20251112085157-4f01f1455f20
 	github.com/ovh/go-ovh v1.6.0
+	github.com/shoenig/test v1.12.2
 )
 
 require (
@@ -34,7 +35,6 @@ require (
 	github.com/mitchellh/mapstructure v1.5.0 // indirect
 	github.com/mitchellh/reflectwalk v1.0.2 // indirect
 	github.com/oklog/run v1.1.0 // indirect
-	github.com/shoenig/test v1.12.2 // indirect
 	github.com/zclconf/go-cty v1.13.0 // indirect
 	golang.org/x/mod v0.17.0 // indirect
 	golang.org/x/net v0.27.0 // indirect

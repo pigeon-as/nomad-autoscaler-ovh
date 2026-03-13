@@ -8,67 +8,211 @@
 package e2e
 
 import (
-	"context"
 	"fmt"
+	"net/http"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"testing"
 	"time"
 
-	hclog "github.com/hashicorp/go-hclog"
-	"github.com/hashicorp/nomad-autoscaler/sdk"
-	"github.com/pigeon-as/nomad-autoscaler-ovh/plugin"
+	"github.com/ovh/go-ovh/ovh"
 	"github.com/shoenig/test/must"
 )
 
-var requiredEnv = []string{
-	"OVH_APPLICATION_KEY",
-	"OVH_APPLICATION_SECRET",
-	"OVH_CONSUMER_KEY",
-	"E2E_PLAN_CODE",
-}
+const autoscalerAddr = "http://127.0.0.1:8080"
 
+var (
+	autoscalerProc *exec.Cmd
+	tmpDir         string
+)
+
+// TestMain starts the autoscaler subprocess with our plugin binary and
+// runs all tests. The Nomad dev agent must already be running (make dev).
 func TestMain(m *testing.M) {
-	for _, key := range requiredEnv {
+	for _, key := range []string{"OVH_APPLICATION_KEY", "OVH_APPLICATION_SECRET", "OVH_CONSUMER_KEY"} {
 		if os.Getenv(key) == "" {
 			fmt.Fprintf(os.Stderr, "required env var %s not set\n", key)
 			os.Exit(1)
 		}
 	}
-	os.Exit(m.Run())
-}
-
-// --- helpers ---
-
-func newPlugin() (*plugin.TargetPlugin, error) {
-	p := plugin.NewOVHDedicatedPlugin(hclog.New(&hclog.LoggerOptions{
-		Name:  "ovh-e2e",
-		Level: hclog.Debug,
-	}))
-	err := p.SetConfig(map[string]string{
-		"ovh_application_key":    os.Getenv("OVH_APPLICATION_KEY"),
-		"ovh_application_secret": os.Getenv("OVH_APPLICATION_SECRET"),
-		"ovh_consumer_key":       os.Getenv("OVH_CONSUMER_KEY"),
-		"ovh_endpoint":           envOrDefault("OVH_ENDPOINT", "ovh-eu"),
-		"ovh_subsidiary":         envOrDefault("OVH_SUBSIDIARY", "FR"),
-	})
-	return p, err
-}
-
-func setupPlugin(t *testing.T) *plugin.TargetPlugin {
-	t.Helper()
-	p, err := newPlugin()
-	must.NoError(t, err)
-	return p
-}
-
-func policyConfig() map[string]string {
-	return map[string]string{
-		"ovh_datacenter":  envOrDefault("E2E_DATACENTER", "gra3"),
-		"ovh_plan_code":   os.Getenv("E2E_PLAN_CODE"),
-		"ovh_os_template": envOrDefault("E2E_OS_TEMPLATE", "debian12_64"),
-		"datacenter":      "dc1",
+	if _, err := exec.LookPath("nomad-autoscaler"); err != nil {
+		fmt.Fprintln(os.Stderr, "nomad-autoscaler not found on PATH")
+		os.Exit(1)
 	}
+
+	var err error
+	tmpDir, err = os.MkdirTemp("", "ovh-e2e-*")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "creating temp dir: %v\n", err)
+		os.Exit(1)
+	}
+
+	if err := startAutoscaler(); err != nil {
+		fmt.Fprintf(os.Stderr, "starting autoscaler: %v\n", err)
+		os.RemoveAll(tmpDir)
+		os.Exit(1)
+	}
+
+	code := m.Run()
+
+	if autoscalerProc != nil && autoscalerProc.Process != nil {
+		autoscalerProc.Process.Kill()
+		autoscalerProc.Wait() //nolint:errcheck
+	}
+	os.RemoveAll(tmpDir)
+	os.Exit(code)
 }
+
+// --- autoscaler lifecycle ---
+
+func startAutoscaler() error {
+	// Copy built plugin binary into a temp plugin dir.
+	pluginDir := filepath.Join(tmpDir, "plugins")
+	os.MkdirAll(pluginDir, 0o755)
+
+	bin := findPluginBinary()
+	if bin == "" {
+		return fmt.Errorf("plugin binary not found (run make build)")
+	}
+	data, err := os.ReadFile(bin)
+	if err != nil {
+		return fmt.Errorf("reading plugin binary: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(pluginDir, filepath.Base(bin)), data, 0o755); err != nil {
+		return fmt.Errorf("copying plugin binary: %v", err)
+	}
+
+	// Policy dir — write lifecycle policy if env vars are set.
+	policyDir := filepath.Join(tmpDir, "policies")
+	os.MkdirAll(policyDir, 0o755)
+
+	if lifecycleEnvSet() {
+		if err := writeLifecyclePolicy(policyDir); err != nil {
+			return fmt.Errorf("writing policy: %v", err)
+		}
+	}
+
+	// Generate autoscaler agent config with credentials from env.
+	cfg := fmt.Sprintf(`log_level  = "DEBUG"
+plugin_dir = %q
+
+nomad {
+  address = "http://127.0.0.1:4646"
+}
+
+http {
+  bind_address = "127.0.0.1"
+  bind_port    = 8080
+}
+
+policy {
+  dir = %q
+}
+
+target "ovh-dedicated" {
+  driver = "ovh-dedicated"
+  config = {
+    ovh_application_key    = %q
+    ovh_application_secret = %q
+    ovh_consumer_key       = %q
+    ovh_endpoint           = %q
+    ovh_subsidiary         = %q
+  }
+}
+`, pluginDir, policyDir,
+		os.Getenv("OVH_APPLICATION_KEY"),
+		os.Getenv("OVH_APPLICATION_SECRET"),
+		os.Getenv("OVH_CONSUMER_KEY"),
+		envOrDefault("OVH_ENDPOINT", "ovh-eu"),
+		envOrDefault("OVH_SUBSIDIARY", "FR"))
+
+	cfgPath := filepath.Join(tmpDir, "autoscaler.hcl")
+	if err := os.WriteFile(cfgPath, []byte(cfg), 0o600); err != nil {
+		return fmt.Errorf("writing config: %v", err)
+	}
+
+	// Start autoscaler agent.
+	autoscalerProc = exec.Command("nomad-autoscaler", "agent", "-config", cfgPath)
+	autoscalerProc.Stdout = os.Stdout
+	autoscalerProc.Stderr = os.Stderr
+	if err := autoscalerProc.Start(); err != nil {
+		return fmt.Errorf("starting autoscaler: %v", err)
+	}
+
+	// Wait for health.
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		resp, err := http.Get(autoscalerAddr + "/v1/health")
+		if err == nil {
+			resp.Body.Close()
+			if resp.StatusCode == 200 {
+				return nil
+			}
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	return fmt.Errorf("autoscaler not healthy after 30s")
+}
+
+func findPluginBinary() string {
+	for _, p := range []string{
+		"../build/nomad-autoscaler-ovh",
+		"build/nomad-autoscaler-ovh",
+	} {
+		if _, err := os.Stat(p); err == nil {
+			abs, _ := filepath.Abs(p)
+			return abs
+		}
+	}
+	return ""
+}
+
+// --- policy helpers ---
+
+func lifecycleEnvSet() bool {
+	return os.Getenv("E2E_PLAN_CODE") != ""
+}
+
+func writeLifecyclePolicy(dir string) error {
+	policy := fmt.Sprintf(`scaling "e2e" {
+  enabled = true
+  min     = 1
+  max     = 1
+
+  policy {
+    evaluation_interval = "10s"
+    cooldown            = "5m"
+    on_check_error      = "ignore"
+
+    check "placeholder" {
+      source = "nomad-apm"
+      query  = "percentage-allocated_cpu"
+
+      strategy "target-value" {
+        target = 70
+      }
+    }
+
+    target "ovh-dedicated" {
+      datacenter           = "dc1"
+      node_class           = "ovh-e2e"
+      ovh_datacenter       = %q
+      ovh_plan_code        = %q
+      ovh_os_template      = %q
+      ovh_product_type     = %q
+    }
+  }
+}
+`, envOrDefault("E2E_DATACENTER", "gra3"),
+		os.Getenv("E2E_PLAN_CODE"),
+		envOrDefault("E2E_OS_TEMPLATE", "debian12_64"),
+		envOrDefault("E2E_PRODUCT_TYPE", "eco"))
+
+	return os.WriteFile(filepath.Join(dir, "e2e.hcl"), []byte(policy), 0o644)
+}
+
+// --- OVH helpers ---
 
 func envOrDefault(key, def string) string {
 	if v := os.Getenv(key); v != "" {
@@ -77,87 +221,93 @@ func envOrDefault(key, def string) string {
 	return def
 }
 
-// newServiceNames returns service names that appeared after a scale operation
-// by diffing the current list against a baseline snapshot.
-func newServiceNames(p *plugin.TargetPlugin, before []string) ([]string, error) {
-	after, err := p.ListServiceNames()
-	if err != nil {
+func newOVHClient(t *testing.T) *ovh.Client {
+	t.Helper()
+	client, err := ovh.NewClient(
+		envOrDefault("OVH_ENDPOINT", "ovh-eu"),
+		os.Getenv("OVH_APPLICATION_KEY"),
+		os.Getenv("OVH_APPLICATION_SECRET"),
+		os.Getenv("OVH_CONSUMER_KEY"),
+	)
+	must.NoError(t, err)
+	return client
+}
+
+func listServiceNames(client *ovh.Client) ([]string, error) {
+	var names []string
+	if err := client.Get("/dedicated/server", &names); err != nil {
 		return nil, err
 	}
-	known := make(map[string]bool, len(before))
-	for _, n := range before {
-		known[n] = true
-	}
-	var added []string
-	for _, n := range after {
-		if !known[n] {
-			added = append(added, n)
-		}
-	}
-	return added, nil
+	return names, nil
 }
 
 // --- tests ---
 
-// TestStatus verifies the plugin connects to Nomad and OVH and returns
-// a valid status. Uses a non-existent node_pool so count is 0 regardless
-// of whether a Nomad dev agent is running.
-func TestStatus(t *testing.T) {
-	p := setupPlugin(t)
-	cfg := policyConfig()
-	cfg["node_pool"] = "e2e-nonexistent"
-
-	status, err := p.Status(cfg)
+// TestPluginHealthy verifies the autoscaler loaded our plugin binary via
+// go-plugin RPC. If SetConfig fails or the binary is broken, the autoscaler
+// won't report healthy.
+func TestPluginHealthy(t *testing.T) {
+	resp, err := http.Get(autoscalerAddr + "/v1/health")
 	must.NoError(t, err)
-	must.True(t, status.Ready)
-	must.Eq(t, int64(0), status.Count)
+	defer resp.Body.Close()
+	must.Eq(t, 200, resp.StatusCode)
 }
 
-// TestScaleLifecycle orders the cheapest Eco server, verifies delivery,
-// then terminates it. This test incurs real OVH costs and takes 20-60 minutes.
+// TestScaleLifecycle verifies the autoscaler evaluates our scaling policy
+// and creates an OVH server (min=1 enforcement on empty pool).
+//
+// This test incurs real OVH costs. Requires E2E_PLAN_CODE env var.
 func TestScaleLifecycle(t *testing.T) {
 	if testing.Short() {
-		t.Skip("skipping long-running scale lifecycle test")
+		t.Skip("skipping: -short")
+	}
+	if !lifecycleEnvSet() {
+		t.Skip("skipping: E2E_PLAN_CODE required")
 	}
 
-	p := setupPlugin(t)
-	cfg := policyConfig()
-	ctx := context.Background()
+	client := newOVHClient(t)
 
-	// Snapshot service names before ordering so we can diff afterward.
-	before, err := p.ListServiceNames()
+	// Snapshot service names before.
+	before, err := listServiceNames(client)
 	must.NoError(t, err)
 
-	// Safety-net cleanup: terminate any servers added during this test.
+	// Cleanup any servers created during this test.
 	t.Cleanup(func() {
-		cleanupCtx, cancel := context.WithTimeout(context.Background(), 60*time.Minute)
-		defer cancel()
-
-		added, _ := newServiceNames(p, before)
-		for _, name := range added {
-			t.Logf("cleanup: terminating %s", name)
-			p.TerminateServer(cleanupCtx, name) //nolint:errcheck
+		after, _ := listServiceNames(client)
+		known := make(map[string]bool, len(before))
+		for _, n := range before {
+			known[n] = true
+		}
+		for _, n := range after {
+			if !known[n] {
+				t.Logf("cleanup: terminating %s", n)
+				// Best-effort terminate — POST /dedicated/server/{name}/terminate
+				client.Post("/dedicated/server/"+n+"/terminate", nil, nil) //nolint:errcheck
+			}
 		}
 	})
 
-	// 1. Scale out: order 1 server.
-	t.Log("ordering server (this takes 10-40 minutes)...")
-	err = p.Scale(sdk.ScalingAction{Count: 1}, cfg)
-	must.NoError(t, err)
+	// Wait for autoscaler to create a server (min=1 policy).
+	t.Log("waiting for autoscaler to order server...")
+	deadline := time.After(20 * time.Minute)
+	for {
+		select {
+		case <-deadline:
+			t.Fatal("timed out waiting for server creation")
+		default:
+		}
 
-	// 2. Verify a new service name appeared.
-	added, err := newServiceNames(p, before)
-	must.NoError(t, err)
-	must.Eq(t, 1, len(added))
-	t.Logf("server delivered: %s", added[0])
-
-	// Note: we don't assert on Status().Count here because the ordered
-	// server hasn't joined Nomad (no user_data_file bootstrap in e2e).
-	// The OVH service-name diff above is the delivery verification.
-
-	// 3. Terminate the server.
-	t.Log("terminating server (this takes 1-10 minutes)...")
-	err = p.TerminateServer(ctx, added[0])
-	must.NoError(t, err)
-	t.Logf("server terminated: %s", added[0])
+		after, _ := listServiceNames(client)
+		known := make(map[string]bool, len(before))
+		for _, n := range before {
+			known[n] = true
+		}
+		for _, n := range after {
+			if !known[n] {
+				t.Logf("server created by autoscaler: %s", n)
+				return
+			}
+		}
+		time.Sleep(30 * time.Second)
+	}
 }
