@@ -6,6 +6,8 @@ package plugin
 import (
 	"context"
 	"fmt"
+	"sync"
+	"time"
 
 	hclog "github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/nomad-autoscaler/plugins/base"
@@ -31,10 +33,19 @@ var (
 // Assert that TargetPlugin meets the target.Target interface.
 var _ target.Target = (*TargetPlugin)(nil)
 
+// scaleOutCooldown is the duration after a successful scale-out during which
+// Status reports Ready=false. This bridges the gap between "server ordered"
+// and "server appears in Nomad" — without a cloud-side scaling group (unlike
+// AWS ASG/Azure VMSS/GCE MIG), we have no provider-side "desired count" that
+// updates instantly. Official plugins get this for free from their cloud API
+// (ASG activity progress, VMSS provisioning state, MIG IsStable); we track
+// it in memory.
+const scaleOutCooldown = 3 * time.Minute
+
 // TargetPlugin is the OVH Dedicated Server implementation of the
 // target.Target interface.
 type TargetPlugin struct {
-	config pluginConfig
+	config map[string]string
 	logger hclog.Logger
 	ovh    *ovh.Client
 	nomad  *nomadapi.Client
@@ -42,6 +53,12 @@ type TargetPlugin struct {
 	// clusterUtils provides general cluster scaling utilities for querying
 	// the state of node pools and performing scaling tasks.
 	clusterUtils *scaleutils.ClusterScaleUtils
+
+	// lastScaleOut tracks the time of the last successful scale-out action.
+	// Used by Status to return Ready=false while servers are being delivered,
+	// preventing the autoscaler from re-triggering before new nodes join.
+	lastScaleOut   time.Time
+	lastScaleOutMu sync.Mutex
 }
 
 // NewOVHDedicatedPlugin returns the OVH Dedicated Server implementation of
@@ -54,9 +71,9 @@ func NewOVHDedicatedPlugin(log hclog.Logger) *TargetPlugin {
 
 // SetConfig satisfies the SetConfig function on the base.Base interface.
 func (t *TargetPlugin) SetConfig(config map[string]string) error {
-	t.config = pluginConfig{}
+	t.config = config
 
-	if err := t.config.parse(config); err != nil {
+	if err := validatePluginConfig(config); err != nil {
 		return fmt.Errorf("failed to parse OVH plugin config: %v", err)
 	}
 
@@ -68,12 +85,13 @@ func (t *TargetPlugin) SetConfig(config map[string]string) error {
 
 	// Auto-detect subsidiary from account profile if not configured,
 	// matching the Terraform OVH provider pattern.
-	if t.config.OvhSubsidiary == "" {
-		sub, err := t.fetchSubsidiary()
+	if getConfigValue(config, configKeyOvhSubsidiary, "") == "" {
+		ctx := context.Background()
+		sub, err := t.fetchSubsidiary(ctx)
 		if err != nil {
 			return fmt.Errorf("failed to auto-detect OVH subsidiary: %v", err)
 		}
-		t.config.OvhSubsidiary = sub
+		t.config[configKeyOvhSubsidiary] = sub
 		t.logger.Info("auto-detected OVH subsidiary", "subsidiary", sub)
 	}
 
@@ -111,11 +129,6 @@ func (t *TargetPlugin) Scale(action sdk.ScalingAction, config map[string]string)
 
 	ctx := context.Background()
 
-	targetCfg, err := parseTargetConfig(config)
-	if err != nil {
-		return fmt.Errorf("failed to parse OVH target config: %v", err)
-	}
-
 	count, err := t.countPoolNodes(config)
 	if err != nil {
 		return fmt.Errorf("failed to count pool nodes: %v", err)
@@ -127,7 +140,15 @@ func (t *TargetPlugin) Scale(action sdk.ScalingAction, config map[string]string)
 	case "in":
 		err = t.scaleIn(ctx, num, config)
 	case "out":
-		err = t.scaleOut(ctx, num, targetCfg)
+		// Validate required per-policy config for provisioning, matching
+		// how AWS validates aws_asg_name at the top of Scale.
+		if getConfigValue(config, configKeyPlanCode, "") == "" {
+			return fmt.Errorf("required config param %s not found", configKeyPlanCode)
+		}
+		if getConfigValue(config, configKeyDatacenter, "") == "" {
+			return fmt.Errorf("required config param %s not found", configKeyDatacenter)
+		}
+		err = t.scaleOut(ctx, num, config)
 	default:
 		t.logger.Info("scaling not required",
 			"current_count", count,
@@ -152,6 +173,23 @@ func (t *TargetPlugin) Status(config map[string]string) (*sdk.TargetStatus, erro
 	}
 	if !ready {
 		return &sdk.TargetStatus{Ready: ready}, nil
+	}
+
+	// OVH has no provider-side scaling group, so we can't query a "desired
+	// count" that updates instantly like AWS ASG/Azure VMSS/GCE MIG. After a
+	// scale-out, new servers take minutes to join Nomad. During this gap,
+	// report Ready=false to prevent the autoscaler from re-triggering.
+	// Official plugins get this from their cloud API (activity progress,
+	// provisioning state, IsStable); we track it in memory.
+	t.lastScaleOutMu.Lock()
+	scaleOutAge := time.Since(t.lastScaleOut)
+	t.lastScaleOutMu.Unlock()
+
+	if scaleOutAge < scaleOutCooldown {
+		t.logger.Debug("scale-out in progress, reporting not ready",
+			"age", scaleOutAge.Round(time.Second),
+			"cooldown", scaleOutCooldown)
+		return &sdk.TargetStatus{Ready: false}, nil
 	}
 
 	count, err := t.countPoolNodes(config)

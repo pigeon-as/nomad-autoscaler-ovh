@@ -17,15 +17,6 @@ import (
 	"github.com/ovh/go-ovh/ovh"
 )
 
-// ovhServer represents an OVH dedicated server as returned by the API.
-// Fields match the /dedicated/server/{serviceName} response.
-type ovhServer struct {
-	ServiceName string `json:"name"`
-	IP          string `json:"ip"`
-	Datacenter  string `json:"datacenter"`
-	State       string `json:"state"`
-}
-
 // ovhTask represents an OVH dedicated server task.
 type ovhTask struct {
 	Id       int64  `json:"taskId"`
@@ -107,21 +98,21 @@ var reTerminateToken = regexp.MustCompile(`.*/billing/confirmTerminate\?id=[[:al
 // setupOVHClient creates a new OVH API client from plugin config.
 func (t *TargetPlugin) setupOVHClient() (*ovh.Client, error) {
 	return ovh.NewClient(
-		t.config.Endpoint,
-		t.config.ApplicationKey,
-		t.config.ApplicationSecret,
-		t.config.ConsumerKey,
+		getConfigValue(t.config, configKeyEndpoint, configValueEndpointDefault),
+		getConfigValue(t.config, configKeyApplicationKey, ""),
+		getConfigValue(t.config, configKeyApplicationSecret, ""),
+		getConfigValue(t.config, configKeyConsumerKey, ""),
 	)
 }
 
 // fetchSubsidiary auto-detects the OVH subsidiary from the account profile.
 // This matches the Terraform OVH provider's behavior when subsidiary is not
 // explicitly configured.
-func (t *TargetPlugin) fetchSubsidiary() (string, error) {
+func (t *TargetPlugin) fetchSubsidiary(ctx context.Context) (string, error) {
 	me := struct {
 		OvhSubsidiary string `json:"ovhSubsidiary"`
 	}{}
-	if err := t.ovh.Get("/me", &me); err != nil {
+	if err := t.ovh.GetWithContext(ctx, "/me", &me); err != nil {
 		return "", fmt.Errorf("fetching account profile: %v", err)
 	}
 	if me.OvhSubsidiary == "" {
@@ -136,9 +127,9 @@ func (t *TargetPlugin) fetchSubsidiary() (string, error) {
 //
 // Used as the remoteIDs whitelist for RunPreScaleInTasksWithRemoteCheck:
 // it ensures we only drain Nomad nodes whose OVH server still exists.
-func (t *TargetPlugin) listServiceNames() ([]string, error) {
+func (t *TargetPlugin) listServiceNames(ctx context.Context) ([]string, error) {
 	var names []string
-	if err := t.ovh.Get("/dedicated/server", &names); err != nil {
+	if err := t.ovh.GetWithContext(ctx, "/dedicated/server", &names); err != nil {
 		return nil, fmt.Errorf("failed to list dedicated servers: %v", err)
 	}
 	return names, nil
@@ -153,60 +144,64 @@ func (t *TargetPlugin) listServiceNames() ([]string, error) {
 //  4. Wait for delivery
 //  5. Find service name from order details
 //  6. Reinstall OS with customizations (hostname, SSH key, user data)
-func (t *TargetPlugin) orderServer(ctx context.Context, cfg *targetConfig) error {
+func (t *TargetPlugin) orderServer(ctx context.Context, config map[string]string) error {
 	// 1. Create cart.
 	cart := &orderCart{}
 	cartOpts := &orderCartOpts{
-		OvhSubsidiary: strings.ToUpper(t.config.OvhSubsidiary),
+		OvhSubsidiary: strings.ToUpper(getConfigValue(t.config, configKeyOvhSubsidiary, "")),
 	}
-	if err := t.ovh.Post("/order/cart", cartOpts, cart); err != nil {
+	if err := t.ovh.PostWithContext(ctx, "/order/cart", cartOpts, cart); err != nil {
 		return fmt.Errorf("creating order cart: %v", err)
 	}
 	t.logger.Debug("created order cart", "cart_id", cart.CartId)
 
 	// Assign cart to the authenticated user.
 	assignEndpoint := fmt.Sprintf("/order/cart/%s/assign", url.PathEscape(cart.CartId))
-	if err := t.ovh.Post(assignEndpoint, nil, nil); err != nil {
+	if err := t.ovh.PostWithContext(ctx, assignEndpoint, nil, nil); err != nil {
 		return fmt.Errorf("assigning order cart: %v", err)
 	}
 
 	// 2. Add item to cart. The product type (e.g. "eco", "baremetalServers")
 	// determines the cart endpoint, matching the Terraform provider's range attribute.
+	planCode := getConfigValue(config, configKeyPlanCode, "")
+	productType := getConfigValue(config, configKeyProductType, configValueProductTypeDefault)
+
 	item := &orderCartItem{}
 	itemOpts := &orderCartItemOpts{
-		PlanCode:    cfg.PlanCode,
+		PlanCode:    planCode,
 		Duration:    orderDuration,
 		PricingMode: orderPricingMode,
 		Quantity:    1,
 	}
-	addEndpoint := fmt.Sprintf("/order/cart/%s/%s", url.PathEscape(cart.CartId), url.PathEscape(cfg.ProductType))
-	if err := t.ovh.Post(addEndpoint, itemOpts, item); err != nil {
-		return fmt.Errorf("adding %s item to cart: %v", cfg.ProductType, err)
+	addEndpoint := fmt.Sprintf("/order/cart/%s/%s", url.PathEscape(cart.CartId), url.PathEscape(productType))
+	if err := t.ovh.PostWithContext(ctx, addEndpoint, itemOpts, item); err != nil {
+		return fmt.Errorf("adding %s item to cart: %v", productType, err)
 	}
 	t.logger.Debug("added item to cart", "item_id", item.ItemId)
 
 	// Configure datacenter.
+	datacenter := getConfigValue(config, configKeyDatacenter, "")
 	configEndpoint := fmt.Sprintf("/order/cart/%s/item/%d/configuration",
 		url.PathEscape(cart.CartId), item.ItemId)
 	configOpts := &orderCartItemConfigOpts{
 		Label: "dedicated_datacenter",
-		Value: cfg.Datacenter,
+		Value: datacenter,
 	}
-	if err := t.ovh.Post(configEndpoint, configOpts, nil); err != nil {
+	if err := t.ovh.PostWithContext(ctx, configEndpoint, configOpts, nil); err != nil {
 		return fmt.Errorf("configuring datacenter: %v", err)
 	}
 
 	// 3. Checkout.
 	checkout := &orderCheckout{}
 	checkoutEndpoint := fmt.Sprintf("/order/cart/%s/checkout", url.PathEscape(cart.CartId))
-	if err := t.ovh.Post(checkoutEndpoint, nil, checkout); err != nil {
+	if err := t.ovh.PostWithContext(ctx, checkoutEndpoint, nil, checkout); err != nil {
 		return fmt.Errorf("checking out cart: %v", err)
 	}
 	t.logger.Info("order created", "order_id", checkout.OrderID)
 
 	// Pay with default payment method.
 	var paymentIds []int64
-	if err := t.ovh.Get("/me/payment/method?default=true", &paymentIds); err != nil {
+	if err := t.ovh.GetWithContext(ctx, "/me/payment/method?default=true", &paymentIds); err != nil {
 		return fmt.Errorf("getting default payment method: %v", err)
 	}
 	if len(paymentIds) == 0 {
@@ -216,20 +211,20 @@ func (t *TargetPlugin) orderServer(ctx context.Context, cfg *targetConfig) error
 	payEndpoint := fmt.Sprintf("/me/order/%d/pay", checkout.OrderID)
 	payOpts := &paymentMethodOpts{}
 	payOpts.PaymentMethod.Id = paymentIds[0]
-	if err := t.ovh.Post(payEndpoint, payOpts, nil); err != nil {
+	if err := t.ovh.PostWithContext(ctx, payEndpoint, payOpts, nil); err != nil {
 		return fmt.Errorf("paying order %d: %v", checkout.OrderID, err)
 	}
 	t.logger.Info("order paid", "order_id", checkout.OrderID, "payment_method", paymentIds[0])
 
 	// 4. Wait for delivery by polling order status.
-	serviceName, err := t.waitForOrderDelivery(ctx, checkout.OrderID, cfg.PlanCode)
+	serviceName, err := t.waitForOrderDelivery(ctx, checkout.OrderID, planCode)
 	if err != nil {
 		return fmt.Errorf("waiting for order %d delivery: %v", checkout.OrderID, err)
 	}
 	t.logger.Info("server delivered", "service_name", serviceName)
 
 	// 5. Reinstall OS.
-	if err := t.reinstallServer(ctx, serviceName, cfg); err != nil {
+	if err := t.reinstallServer(ctx, serviceName, config); err != nil {
 		return fmt.Errorf("reinstalling server %s: %v", serviceName, err)
 	}
 
@@ -250,14 +245,14 @@ func (t *TargetPlugin) waitForOrderDelivery(ctx context.Context, orderID int64, 
 		}
 
 		var status string
-		if err := t.ovh.Get(statusEndpoint, &status); err != nil {
+		if err := t.ovh.GetWithContext(ctx, statusEndpoint, &status); err != nil {
 			t.logger.Warn("error polling order status, retrying",
 				"order_id", orderID, "error", err)
 		} else {
 			t.logger.Debug("order status", "order_id", orderID, "status", status)
 
 			if status == "delivered" {
-				return t.serviceNameFromOrder(orderID, planCode)
+				return t.serviceNameFromOrder(ctx, orderID, planCode)
 			}
 		}
 
@@ -273,14 +268,14 @@ func (t *TargetPlugin) waitForOrderDelivery(ctx context.Context, orderID int64, 
 // details. Follows the same pattern as the Terraform provider:
 // - EU/CA endpoints: use the extension route (/details/{id}/extension)
 // - US endpoint: use the operations route (/details/{id}/operations)
-func (t *TargetPlugin) serviceNameFromOrder(orderID int64, planCode string) (string, error) {
+func (t *TargetPlugin) serviceNameFromOrder(ctx context.Context, orderID int64, planCode string) (string, error) {
 	var detailIds []int64
 	detailsEndpoint := fmt.Sprintf("/me/order/%d/details", orderID)
-	if err := t.ovh.Get(detailsEndpoint, &detailIds); err != nil {
+	if err := t.ovh.GetWithContext(ctx, detailsEndpoint, &detailIds); err != nil {
 		return "", fmt.Errorf("getting order details: %v", err)
 	}
 
-	isUS := t.config.Endpoint == "ovh-us"
+	isUS := getConfigValue(t.config, configKeyEndpoint, configValueEndpointDefault) == "ovh-us"
 
 	for _, detailId := range detailIds {
 		// Try to match plan code to find the right detail.
@@ -295,7 +290,7 @@ func (t *TargetPlugin) serviceNameFromOrder(orderID int64, planCode string) (str
 			}{}
 
 			extEndpoint := fmt.Sprintf("/me/order/%d/details/%d/extension", orderID, detailId)
-			if err := t.ovh.Get(extEndpoint, &ext); err != nil {
+			if err := t.ovh.GetWithContext(ctx, extEndpoint, &ext); err != nil {
 				continue
 			}
 
@@ -311,7 +306,7 @@ func (t *TargetPlugin) serviceNameFromOrder(orderID int64, planCode string) (str
 			}
 
 			opsEndpoint := fmt.Sprintf("/me/order/%d/details/%d/operations", orderID, detailId)
-			if err := t.ovh.Get(opsEndpoint, &ops); err != nil {
+			if err := t.ovh.GetWithContext(ctx, opsEndpoint, &ops); err != nil {
 				continue
 			}
 
@@ -328,7 +323,7 @@ func (t *TargetPlugin) serviceNameFromOrder(orderID int64, planCode string) (str
 			Domain string `json:"domain"`
 		}{}
 		detailEndpoint := fmt.Sprintf("/me/order/%d/details/%d", orderID, detailId)
-		if err := t.ovh.Get(detailEndpoint, &detail); err != nil {
+		if err := t.ovh.GetWithContext(ctx, detailEndpoint, &detail); err != nil {
 			return "", fmt.Errorf("getting order detail %d: %v", detailId, err)
 		}
 
@@ -341,26 +336,28 @@ func (t *TargetPlugin) serviceNameFromOrder(orderID int64, planCode string) (str
 }
 
 // reinstallServer triggers OS reinstallation and waits for completion.
-func (t *TargetPlugin) reinstallServer(ctx context.Context, serviceName string, cfg *targetConfig) error {
+func (t *TargetPlugin) reinstallServer(ctx context.Context, serviceName string, config map[string]string) error {
+	osTemplate := getConfigValue(config, configKeyOSTemplate, configValueOSTemplateDefault)
 	opts := &reinstallOpts{
-		Os: cfg.OSTemplate,
+		Os: osTemplate,
 	}
 
 	// Add customizations if any are configured.
-	hostname := fmt.Sprintf("wrk-%s-%s", cfg.Datacenter, serviceName)
+	datacenter := getConfigValue(config, configKeyDatacenter, "")
+	hostname := fmt.Sprintf("wrk-%s-%s", datacenter, serviceName)
 	opts.Customizations = &reinstallCustomize{
 		Hostname: &hostname,
 	}
-	if cfg.SSHKey != "" {
-		opts.Customizations.SshKey = &cfg.SSHKey
+	if sshKey := getConfigValue(config, configKeySSHKey, ""); sshKey != "" {
+		opts.Customizations.SshKey = &sshKey
 	}
-	if cfg.PostInstallScript != "" {
-		opts.Customizations.PostInstallationScript = &cfg.PostInstallScript
+	if script := getConfigValue(config, configKeyPostInstallScript, ""); script != "" {
+		opts.Customizations.PostInstallationScript = &script
 	}
-	if cfg.UserDataFile != "" {
-		data, err := os.ReadFile(cfg.UserDataFile)
+	if userDataFile := getConfigValue(config, configKeyUserDataFile, ""); userDataFile != "" {
+		data, err := os.ReadFile(userDataFile)
 		if err != nil {
-			return fmt.Errorf("reading user data file %s: %v", cfg.UserDataFile, err)
+			return fmt.Errorf("reading user data file %s: %v", userDataFile, err)
 		}
 		s := string(data)
 		opts.Customizations.ConfigDriveUserData = &s
@@ -368,14 +365,21 @@ func (t *TargetPlugin) reinstallServer(ctx context.Context, serviceName string, 
 
 	task := &ovhTask{}
 	endpoint := fmt.Sprintf("/dedicated/server/%s/reinstall", url.PathEscape(serviceName))
-	if err := t.ovh.Post(endpoint, opts, task); err != nil {
-		return fmt.Errorf("calling POST %s: %v", endpoint, err)
+	if err := t.ovh.PostWithContext(ctx, endpoint, opts, task); err != nil {
+		// The OVH API can return an error even when the task was created.
+		// If task.Id is non-zero, the task exists despite the error.
+		// This matches the Terraform OVH provider's handling.
+		if task.Id == 0 {
+			return fmt.Errorf("calling POST %s: %v", endpoint, err)
+		}
+		t.logger.Warn("reinstall POST returned error but task was created",
+			"task_id", task.Id, "error", err)
 	}
 
 	t.logger.Info("reinstall task created",
 		"service_name", serviceName,
 		"task_id", task.Id,
-		"os", cfg.OSTemplate,
+		"os", osTemplate,
 	)
 
 	return t.waitForTask(ctx, serviceName, task.Id)
@@ -396,7 +400,7 @@ func (t *TargetPlugin) waitForTask(ctx context.Context, serviceName string, task
 		}
 
 		task := &ovhTask{}
-		if err := t.ovh.Get(endpoint, task); err != nil {
+		if err := t.ovh.GetWithContext(ctx, endpoint, task); err != nil {
 			// OVH API occasionally returns 404/500 for in-flight tasks.
 			if errOvh, ok := err.(*ovh.APIError); ok && (errOvh.Code == 404 || errOvh.Code == 500) {
 				t.logger.Debug("transient error polling task, retrying",
@@ -430,14 +434,14 @@ func (t *TargetPlugin) waitForTask(ctx context.Context, serviceName string, task
 // same pattern as the Terraform OVH provider's orderDelete.
 func (t *TargetPlugin) terminateServer(ctx context.Context, serviceName string) error {
 	// Record existing email notification IDs so we can find the new one.
-	oldIds, err := t.notificationEmailIds()
+	oldIds, err := t.notificationEmailIds(ctx)
 	if err != nil {
 		return fmt.Errorf("listing notification emails: %v", err)
 	}
 
 	// POST /dedicated/server/{serviceName}/terminate
 	endpoint := fmt.Sprintf("/dedicated/server/%s/terminate", url.PathEscape(serviceName))
-	if err := t.ovh.Post(endpoint, nil, nil); err != nil {
+	if err := t.ovh.PostWithContext(ctx, endpoint, nil, nil); err != nil {
 		if errOvh, ok := err.(*ovh.APIError); ok && (errOvh.Code == 404 || errOvh.Code == 460) {
 			t.logger.Info("server already terminated or not found", "service_name", serviceName)
 			return nil
@@ -458,7 +462,7 @@ func (t *TargetPlugin) terminateServer(ctx context.Context, serviceName string) 
 	confirmEndpoint := fmt.Sprintf("/dedicated/server/%s/confirmTermination",
 		url.PathEscape(serviceName))
 	confirmOpts := &confirmTerminationOpts{Token: token}
-	if err := t.ovh.Post(confirmEndpoint, confirmOpts, nil); err != nil {
+	if err := t.ovh.PostWithContext(ctx, confirmEndpoint, confirmOpts, nil); err != nil {
 		return fmt.Errorf("confirming termination of %s: %v", serviceName, err)
 	}
 
@@ -486,7 +490,7 @@ func (t *TargetPlugin) waitForTerminationToken(ctx context.Context, serviceName 
 			return "", fmt.Errorf("timed out waiting for termination email after %v", timeout)
 		}
 
-		email, err := t.findNewNotificationEmail(watermark, matches)
+		email, err := t.findNewNotificationEmail(ctx, watermark, matches)
 		if err != nil {
 			t.logger.Debug("error checking notification emails, retrying", "error", err)
 		} else if email != nil {
@@ -506,9 +510,9 @@ func (t *TargetPlugin) waitForTerminationToken(ctx context.Context, serviceName 
 }
 
 // notificationEmailIds returns sorted IDs of existing notification emails.
-func (t *TargetPlugin) notificationEmailIds() ([]int64, error) {
+func (t *TargetPlugin) notificationEmailIds(ctx context.Context) ([]int64, error) {
 	var ids []int64
-	if err := t.ovh.Get("/me/notification/email/history", &ids); err != nil {
+	if err := t.ovh.GetWithContext(ctx, "/me/notification/email/history", &ids); err != nil {
 		return nil, err
 	}
 	// IDs are typically sorted but ensure it for watermark comparison.
@@ -518,8 +522,8 @@ func (t *TargetPlugin) notificationEmailIds() ([]int64, error) {
 
 // findNewNotificationEmail looks for a notification email newer than
 // watermark whose body contains all of the specified match strings.
-func (t *TargetPlugin) findNewNotificationEmail(watermark int64, matches []string) (*notificationEmail, error) {
-	ids, err := t.notificationEmailIds()
+func (t *TargetPlugin) findNewNotificationEmail(ctx context.Context, watermark int64, matches []string) (*notificationEmail, error) {
+	ids, err := t.notificationEmailIds(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -531,7 +535,7 @@ func (t *TargetPlugin) findNewNotificationEmail(watermark int64, matches []strin
 
 		email := &notificationEmail{}
 		endpoint := fmt.Sprintf("/me/notification/email/history/%d", id)
-		if err := t.ovh.Get(endpoint, email); err != nil {
+		if err := t.ovh.GetWithContext(ctx, endpoint, email); err != nil {
 			return nil, fmt.Errorf("getting notification email %d: %v", id, err)
 		}
 
