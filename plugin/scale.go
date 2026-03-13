@@ -6,7 +6,6 @@ package plugin
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/hashicorp/nomad-autoscaler/sdk/helper/scaleutils"
 )
@@ -85,9 +84,12 @@ func (t *TargetPlugin) scaleIn(ctx context.Context, num int64, config map[string
 
 // scaleOut orders num new OVH dedicated servers.
 //
-// NOTE: OVH dedicated server delivery takes 2–10 minutes. The autoscaler
-// policy MUST use a long cooldown (e.g. cooldown = "15m") to avoid
-// re-triggering while waiting for delivery.
+// OVH dedicated server delivery takes 2–10 minutes. The autoscaler policy
+// MUST use an adequate cooldown (e.g. cooldown = "15m") to prevent
+// re-triggering while servers are being delivered and joining the cluster.
+// Unlike AWS ASG/Azure VMSS/GCE MIG, OVH has no provider-side "desired count"
+// that updates instantly, so the policy cooldown is the only mechanism
+// preventing double-ordering.
 func (t *TargetPlugin) scaleOut(ctx context.Context, num int64, config map[string]string) error {
 	planCode := getConfigValue(config, configKeyPlanCode, "")
 	datacenter := getConfigValue(config, configKeyDatacenter, "")
@@ -103,12 +105,6 @@ func (t *TargetPlugin) scaleOut(ctx context.Context, num int64, config map[strin
 			return fmt.Errorf("failed to order OVH server: %v", err)
 		}
 	}
-
-	// Record scale-out time so Status reports Ready=false until new nodes
-	// have time to join the Nomad cluster.
-	t.lastScaleOutMu.Lock()
-	t.lastScaleOut = time.Now()
-	t.lastScaleOutMu.Unlock()
 
 	return nil
 }
