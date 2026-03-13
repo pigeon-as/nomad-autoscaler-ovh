@@ -112,7 +112,7 @@ func TestGetConfigValue(t *testing.T) {
 		{"present key", map[string]string{"k": "v"}, "k", "d", "v"},
 		{"missing key uses default", map[string]string{}, "k", "d", "d"},
 		{"empty value returned as-is", map[string]string{"k": ""}, "k", "d", ""},
-		{"os_template default", map[string]string{}, configKeyOSTemplate, configValueOSTemplateDefault, configValueOSTemplateDefault},
+		{"os default", map[string]string{}, configKeyOperatingSystem, configValueOperatingSystemDefault, configValueOperatingSystemDefault},
 		{"product_type default", map[string]string{}, configKeyProductType, configValueProductTypeDefault, configValueProductTypeDefault},
 		{"endpoint default", map[string]string{}, configKeyEndpoint, configValueEndpointDefault, configValueEndpointDefault},
 	}
