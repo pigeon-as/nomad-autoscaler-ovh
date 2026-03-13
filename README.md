@@ -1,7 +1,5 @@
 # nomad-autoscaler-ovh
 
-> **Work in progress.** Don't expect anything from this plugin at the moment. It's experimental and work in progress.
-
 Nomad Autoscaler [target plugin](https://developer.hashicorp.com/nomad/tools/autoscaling/plugins/target) for horizontal cluster scaling via [OVH dedicated servers](https://eu.api.ovh.com/console/).
 
 Orders new servers when cluster resources are exhausted, terminates idle servers on scale-in. Servers are identified by Nomad node attributes (`unique.platform.ovh.service_name`) and joined to the cluster via ConfigDrive userdata.
@@ -51,16 +49,17 @@ check "allocated_cpu" {
   }
 
   target "ovh-dedicated" {
-    node_pool              = "default"
-    node_drain_deadline    = "15m"
-    node_purge             = "true"
-    node_selector_strategy = "least_busy"
-    ovh_datacenter         = "gra3"
-    ovh_plan_code          = "24adv-1"
-    ovh_os_template        = "debian12_64"
-    ovh_ssh_key            = "ssh-ed25519 AAAA..."
-    ovh_user_data          = "..."
-    ovh_product_type       = "eco"
+    node_pool                = "default"
+    node_drain_deadline      = "15m"
+    node_purge               = "true"
+    node_selector_strategy   = "least_busy"
+    ovh_datacenter           = "gra3"
+    ovh_plan_code            = "24adv-1"
+    ovh_os_template          = "debian12_64"
+    ovh_ssh_key              = "ssh-ed25519 AAAA..."
+    ovh_user_data_file       = "/etc/pigeon/worker-userdata.sh"
+    ovh_post_install_script  = "https://example.com/bootstrap.sh"
+    ovh_product_type         = "eco"
   }
 }
 ```
@@ -71,7 +70,8 @@ check "allocated_cpu" {
 | `ovh_plan_code` | `""` | OVH plan code for new servers (e.g. `24adv-1`). Required for scale-out |
 | `ovh_os_template` | `debian12_64` | OS template for server installation |
 | `ovh_ssh_key` | `""` | SSH public key content for server installation |
-| `ovh_user_data` | `""` | ConfigDrive userdata for server bootstrap |
+| `ovh_user_data_file` | `""` | Path to a file containing ConfigDrive userdata for server bootstrap |
+| `ovh_post_install_script` | `""` | URL to a post-installation script run after OS install |
 | `ovh_product_type` | `eco` | OVH cart product type (`eco`, `baremetalServers`) |
 | `datacenter` | `""` | Nomad client datacenter filter |
 | `node_class` | `""` | Nomad client node class filter |
@@ -85,7 +85,7 @@ The `node_percentage-allocated_cpu` query measures how much of the cluster's CPU
 
 ## Delivery Latency
 
-OVH dedicated servers take **2–10 minutes** to deliver. Use long cooldowns to avoid duplicate orders:
+OVH dedicated servers take **2–10 minutes** to deliver. Unlike AWS ASG/Azure VMSS/GCE MIG, OVH has no provider-side "desired count" that updates instantly, so the policy **cooldown** is the only mechanism preventing double-ordering:
 
 ```hcl
 scaling "workers" {
