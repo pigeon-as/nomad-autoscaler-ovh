@@ -47,11 +47,17 @@ type targetConfig struct {
 	// not a key name.
 	SSHKey string
 
-	// UserData is the base64-encoded post-installation script to run on new
-	// servers during OS installation. Used to bootstrap the server into the
-	// WireGuard mesh and Nomad cluster. Passed to the OVH API as
+	// PostInstallScript is the base64-encoded post-installation script to
+	// run on new servers during OS installation. Passed to the OVH API as
 	// customizations.postInstallationScript.
-	UserData string
+	PostInstallScript string
+
+	// UserDataFile is the path to a file on the autoscaler host whose
+	// contents are passed as customizations.configDriveUserData during OS
+	// reinstallation. The file is read at scale-out time so it can be
+	// re-rendered between scaling events (e.g. by pigeon-template after
+	// enrollment key rotation).
+	UserDataFile string
 
 	// ProductType is the OVH order cart product type (e.g. "eco",
 	// "baremetalServers"). Determines which cart endpoint is used for
@@ -74,7 +80,8 @@ const (
 	configKeyPlanCode    = "ovh_plan_code"
 	configKeyOSTemplate  = "ovh_os_template"
 	configKeySSHKey      = "ovh_ssh_key"
-	configKeyUserData    = "ovh_user_data"
+	configKeyPostInstallScript = "ovh_post_install_script"
+	configKeyUserDataFile      = "ovh_user_data_file"
 	configKeyProductType = "ovh_product_type"
 )
 
@@ -104,9 +111,10 @@ func parseTargetConfig(config map[string]string) (*targetConfig, error) {
 		Datacenter:  getConfigValue(config, configKeyDatacenter, ""),
 		PlanCode:    getConfigValue(config, configKeyPlanCode, ""),
 		OSTemplate:  getConfigValue(config, configKeyOSTemplate, configValueOSTemplateDefault),
-		SSHKey:      getConfigValue(config, configKeySSHKey, ""),
-		UserData:    getConfigValue(config, configKeyUserData, ""),
-		ProductType: getConfigValue(config, configKeyProductType, configValueProductTypeDefault),
+		SSHKey:           getConfigValue(config, configKeySSHKey, ""),
+		PostInstallScript: getConfigValue(config, configKeyPostInstallScript, ""),
+		UserDataFile:     getConfigValue(config, configKeyUserDataFile, ""),
+		ProductType:      getConfigValue(config, configKeyProductType, configValueProductTypeDefault),
 	}
 
 	return tc, nil

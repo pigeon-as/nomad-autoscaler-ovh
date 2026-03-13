@@ -152,7 +152,7 @@ func TestScaleLifecycle(t *testing.T) {
 	t.Logf("server delivered: %s", added[0])
 
 	// Note: we don't assert on Status().Count here because the ordered
-	// server hasn't joined Nomad (no ovh_user_data bootstrap in e2e).
+	// server hasn't joined Nomad (no user_data_file bootstrap in e2e).
 	// The OVH service-name diff above is the delivery verification.
 
 	// 3. Terminate the server.

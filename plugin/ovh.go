@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"os"
 	"regexp"
 	"slices"
 	"strings"
@@ -85,6 +86,7 @@ type reinstallCustomize struct {
 	Hostname               *string `json:"hostname,omitempty"`
 	SshKey                 *string `json:"sshKey,omitempty"`
 	PostInstallationScript *string `json:"postInstallationScript,omitempty"`
+	ConfigDriveUserData    *string `json:"configDriveUserData,omitempty"`
 }
 
 // Notification email types (used for termination confirmation).
@@ -352,8 +354,16 @@ func (t *TargetPlugin) reinstallServer(ctx context.Context, serviceName string, 
 	if cfg.SSHKey != "" {
 		opts.Customizations.SshKey = &cfg.SSHKey
 	}
-	if cfg.UserData != "" {
-		opts.Customizations.PostInstallationScript = &cfg.UserData
+	if cfg.PostInstallScript != "" {
+		opts.Customizations.PostInstallationScript = &cfg.PostInstallScript
+	}
+	if cfg.UserDataFile != "" {
+		data, err := os.ReadFile(cfg.UserDataFile)
+		if err != nil {
+			return fmt.Errorf("reading user data file %s: %v", cfg.UserDataFile, err)
+		}
+		s := string(data)
+		opts.Customizations.ConfigDriveUserData = &s
 	}
 
 	task := &ovhTask{}

@@ -123,12 +123,13 @@ func TestParseTargetConfig(t *testing.T) {
 		{
 			name: "all fields",
 			config: map[string]string{
-				"ovh_datacenter":   "gra3",
-				"ovh_plan_code":    "24sk10",
-				"ovh_os_template":  "ubuntu2204_64",
-				"ovh_ssh_key":      "ssh-ed25519 AAAA...",
-				"ovh_user_data":    "#!/bin/bash\necho hi",
-				"ovh_product_type": "baremetalServers",
+				"ovh_datacenter":          "gra3",
+				"ovh_plan_code":           "24sk10",
+				"ovh_os_template":         "ubuntu2204_64",
+				"ovh_ssh_key":             "ssh-ed25519 AAAA...",
+				"ovh_post_install_script": "#!/bin/bash\necho hi",
+				"ovh_user_data_file":      "/opt/pigeon/worker-userdata.sh",
+				"ovh_product_type":        "baremetalServers",
 			},
 			check: func(t *testing.T, tc *targetConfig) {
 				if tc.Datacenter != "gra3" {
@@ -143,8 +144,11 @@ func TestParseTargetConfig(t *testing.T) {
 				if tc.SSHKey != "ssh-ed25519 AAAA..." {
 					t.Errorf("SSHKey = %q", tc.SSHKey)
 				}
-				if tc.UserData != "#!/bin/bash\necho hi" {
-					t.Errorf("UserData = %q", tc.UserData)
+				if tc.PostInstallScript != "#!/bin/bash\necho hi" {
+					t.Errorf("PostInstallScript = %q", tc.PostInstallScript)
+				}
+				if tc.UserDataFile != "/opt/pigeon/worker-userdata.sh" {
+					t.Errorf("UserDataFile = %q", tc.UserDataFile)
 				}
 				if tc.ProductType != "baremetalServers" {
 					t.Errorf("ProductType = %q", tc.ProductType)
