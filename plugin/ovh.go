@@ -565,15 +565,3 @@ func ovhNodeIDMap(node *api.Node) (string, error) {
 	}
 	return val, nil
 }
-
-// TerminateServer terminates an OVH dedicated server by service name,
-// including the email confirmation flow. Intended for e2e test cleanup.
-func (t *TargetPlugin) TerminateServer(ctx context.Context, serviceName string) error {
-	return t.terminateServer(ctx, serviceName)
-}
-
-// ListServiceNames returns all OVH dedicated server service names on the
-// account. Intended for e2e tests to diff before/after scale operations.
-func (t *TargetPlugin) ListServiceNames() ([]string, error) {
-	return t.listServiceNames()
-}
