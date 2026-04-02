@@ -16,7 +16,8 @@ const (
 
 // Per-policy config keys. Reinstall-related keys align with the Terraform OVH
 // provider's snake_case attribute names for the reinstall customizations block.
-// ovh_display_name is separate — it updates the service name via /services/{id}.
+// ovh_display_name is separate — it sets the service's displayName field via
+// /services/{id} (it does not rename the dedicated server service).
 const (
 	configKeyDatacenter              = "ovh_datacenter"
 	configKeyPlanCode                = "ovh_plan_code"
