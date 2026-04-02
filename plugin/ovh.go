@@ -78,6 +78,7 @@ type reinstallCustomize struct {
 	SshKey                 *string `json:"sshKey,omitempty"`
 	PostInstallationScript *string `json:"postInstallationScript,omitempty"`
 	ConfigDriveUserData    *string `json:"configDriveUserData,omitempty"`
+	EfiBootloaderPath      *string `json:"efiBootloaderPath,omitempty"`
 }
 
 // Notification email types (used for termination confirmation).
@@ -141,8 +142,8 @@ func (t *TargetPlugin) listServiceNames(ctx context.Context) ([]string, error) {
 //  1. Create cart + assign
 //  2. Add item (planCode, datacenter configuration)
 //  3. Checkout + pay with default payment method
-//  4. Wait for delivery
-//  5. Find service name from order details
+//  4. Wait for delivery + find service name from order details
+//  5. Set display name if configured (via /services/{id})
 //  6. Reinstall OS with customizations (hostname, SSH key, user data)
 func (t *TargetPlugin) orderServer(ctx context.Context, config map[string]string) error {
 	// 1. Create cart.
@@ -223,7 +224,26 @@ func (t *TargetPlugin) orderServer(ctx context.Context, config map[string]string
 	}
 	t.logger.Info("server delivered", "service_name", serviceName)
 
-	// 5. Reinstall OS.
+	// 5. Set display name if configured (OVH IAM: serviceInfos → /services/{id}).
+	if displayName := getConfigValue(config, configKeyDisplayName, ""); displayName != "" {
+		var serviceInfos struct {
+			ServiceID int64 `json:"serviceId"`
+		}
+		infoEndpoint := fmt.Sprintf("/dedicated/server/%s/serviceInfos", url.PathEscape(serviceName))
+		if err := t.ovh.GetWithContext(ctx, infoEndpoint, &serviceInfos); err != nil {
+			t.logger.Warn("failed to get serviceInfos for display name", "service_name", serviceName, "error", err)
+		} else {
+			body := struct {
+				DisplayName string `json:"displayName"`
+			}{DisplayName: displayName}
+			svcEndpoint := fmt.Sprintf("/services/%d", serviceInfos.ServiceID)
+			if err := t.ovh.PutWithContext(ctx, svcEndpoint, &body, nil); err != nil {
+				t.logger.Warn("failed to set display name", "service_name", serviceName, "error", err)
+			}
+		}
+	}
+
+	// 6. Reinstall OS.
 	if err := t.reinstallServer(ctx, serviceName, config); err != nil {
 		return fmt.Errorf("reinstalling server %s: %v", serviceName, err)
 	}
@@ -342,29 +362,34 @@ func (t *TargetPlugin) reinstallServer(ctx context.Context, serviceName string, 
 		Os: os_,
 	}
 
-	// Add customizations if any are configured.
-	datacenter := getConfigValue(config, configKeyDatacenter, "")
-	hostname := fmt.Sprintf("wrk-%s-%s", datacenter, serviceName)
-	opts.Customizations = &reinstallCustomize{
-		Hostname: &hostname,
+	// Build customizations only if any are configured.
+	var c reinstallCustomize
+	if hostname := getConfigValue(config, configKeyHostname, ""); hostname != "" {
+		c.Hostname = &hostname
 	}
 	if sshKey := getConfigValue(config, configKeySSHKey, ""); sshKey != "" {
-		opts.Customizations.SshKey = &sshKey
+		c.SshKey = &sshKey
 	}
 	if script := getConfigValue(config, configKeyPostInstallationScript, ""); script != "" {
-		opts.Customizations.PostInstallationScript = &script
+		c.PostInstallationScript = &script
+	}
+	if efi := getConfigValue(config, configKeyEfiBootloaderPath, ""); efi != "" {
+		c.EfiBootloaderPath = &efi
 	}
 
 	// ConfigDrive userdata: inline value takes precedence over file path.
 	if userData := getConfigValue(config, configKeyConfigDriveUserData, ""); userData != "" {
-		opts.Customizations.ConfigDriveUserData = &userData
+		c.ConfigDriveUserData = &userData
 	} else if userDataFile := getConfigValue(config, configKeyConfigDriveUserDataFile, ""); userDataFile != "" {
 		data, err := os.ReadFile(userDataFile)
 		if err != nil {
 			return fmt.Errorf("reading config drive user data file %s: %v", userDataFile, err)
 		}
 		s := string(data)
-		opts.Customizations.ConfigDriveUserData = &s
+		c.ConfigDriveUserData = &s
+	}
+	if c != (reinstallCustomize{}) {
+		opts.Customizations = &c
 	}
 
 	task := &ovhTask{}
