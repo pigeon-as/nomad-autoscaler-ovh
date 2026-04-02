@@ -21,17 +21,20 @@ const (
 	configKeyPlanCode                = "ovh_plan_code"
 	configKeyOperatingSystem         = "ovh_operating_system"
 	configKeySSHKey                  = "ovh_ssh_key"
+	configKeyHostname                = "ovh_hostname"
+	configKeyDisplayName             = "ovh_display_name"
 	configKeyPostInstallationScript  = "ovh_post_installation_script"
 	configKeyConfigDriveUserData     = "ovh_config_drive_user_data"
 	configKeyConfigDriveUserDataFile = "ovh_config_drive_user_data_file"
 	configKeyProductType             = "ovh_product_type"
+	configKeyEfiBootloaderPath       = "ovh_efi_bootloader_path"
 )
 
 // Default values.
 const (
-	configValueEndpointDefault          = "ovh-eu"
-	configValueOperatingSystemDefault   = "debian12_64"
-	configValueProductTypeDefault       = "eco"
+	configValueEndpointDefault        = "ovh-eu"
+	configValueOperatingSystemDefault = "debian12_64"
+	configValueProductTypeDefault     = "eco"
 )
 
 // validatePluginConfig checks that required agent-level OVH credentials

@@ -74,6 +74,7 @@ check "allocated_cpu" {
 | `ovh_config_drive_user_data_file` | `""` | Path to a ConfigDrive userdata file. Read at scale-out time |
 | `ovh_post_installation_script` | `""` | URL to a post-installation script run during OVH's install phase |
 | `ovh_product_type` | `eco` | OVH cart product type (`eco`, `baremetalServers`) |
+| `ovh_efi_bootloader_path` | `""` | EFI bootloader path for iPXE (e.g. `\EFI\Linux\pigeon.efi`). Required for UKI/UEFI boot |
 | `datacenter` | `""` | Nomad client datacenter filter |
 | `node_class` | `""` | Nomad client node class filter |
 | `node_pool` | `""` | Nomad client node pool filter |
