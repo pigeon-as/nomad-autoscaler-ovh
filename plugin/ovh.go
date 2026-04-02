@@ -142,8 +142,8 @@ func (t *TargetPlugin) listServiceNames(ctx context.Context) ([]string, error) {
 //  1. Create cart + assign
 //  2. Add item (planCode, datacenter configuration)
 //  3. Checkout + pay with default payment method
-//  4. Wait for delivery
-//  5. Find service name from order details
+//  4. Wait for delivery + find service name from order details
+//  5. Set display name if configured (via /services/{id})
 //  6. Reinstall OS with customizations (hostname, SSH key, user data)
 func (t *TargetPlugin) orderServer(ctx context.Context, config map[string]string) error {
 	// 1. Create cart.
