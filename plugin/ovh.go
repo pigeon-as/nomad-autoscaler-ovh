@@ -40,6 +40,16 @@ const (
 	orderPricingMode = "default" // standard pricing
 )
 
+// Polling timeouts and intervals for long-running OVH operations.
+const (
+	orderDeliveryTimeout  = 2 * time.Hour
+	orderDeliveryInterval = 30 * time.Second
+	taskTimeout           = 60 * time.Minute
+	taskPollInterval      = 10 * time.Second
+	emailTimeout          = 30 * time.Minute
+	emailPollInterval     = 10 * time.Second
+)
+
 type orderCartItemOpts struct {
 	PlanCode    string `json:"planCode"`
 	Duration    string `json:"duration"`
@@ -95,6 +105,32 @@ type confirmTerminationOpts struct {
 
 // Regex to extract the termination token from the confirmation email.
 var reTerminateToken = regexp.MustCompile(`.*/billing/confirmTerminate\?id=[[:alnum:]]+&token=([[:alnum:]]+).*`)
+
+// poll calls fn repeatedly at interval until it returns done=true, ctx is
+// cancelled, or timeout elapses. This is the shared polling skeleton for
+// all long-running OVH operations (order delivery, task completion, email).
+func poll(ctx context.Context, timeout, interval time.Duration, fn func() (done bool, err error)) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		if time.Now().After(deadline) {
+			return fmt.Errorf("timed out after %v", timeout)
+		}
+
+		done, err := fn()
+		if err != nil {
+			return err
+		}
+		if done {
+			return nil
+		}
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(interval):
+		}
+	}
+}
 
 // setupOVHClient creates a new OVH API client from plugin config.
 func (t *TargetPlugin) setupOVHClient() (*ovh.Client, error) {
@@ -255,33 +291,29 @@ func (t *TargetPlugin) orderServer(ctx context.Context, config map[string]string
 // extracts the service name from the order details.
 func (t *TargetPlugin) waitForOrderDelivery(ctx context.Context, orderID int64, planCode string) (string, error) {
 	statusEndpoint := fmt.Sprintf("/me/order/%d/status", orderID)
-	timeout := 2 * time.Hour
-	interval := 30 * time.Second
 
-	deadline := time.Now().Add(timeout)
-	for {
-		if time.Now().After(deadline) {
-			return "", fmt.Errorf("timed out after %v", timeout)
-		}
-
+	var serviceName string
+	err := poll(ctx, orderDeliveryTimeout, orderDeliveryInterval, func() (bool, error) {
 		var status string
 		if err := t.ovh.GetWithContext(ctx, statusEndpoint, &status); err != nil {
 			t.logger.Warn("error polling order status, retrying",
 				"order_id", orderID, "error", err)
-		} else {
-			t.logger.Debug("order status", "order_id", orderID, "status", status)
-
-			if status == "delivered" {
-				return t.serviceNameFromOrder(ctx, orderID, planCode)
-			}
+			return false, nil
 		}
 
-		select {
-		case <-ctx.Done():
-			return "", ctx.Err()
-		case <-time.After(interval):
+		t.logger.Debug("order status", "order_id", orderID, "status", status)
+		if status != "delivered" {
+			return false, nil
 		}
-	}
+
+		name, err := t.serviceNameFromOrder(ctx, orderID, planCode)
+		if err != nil {
+			return false, err
+		}
+		serviceName = name
+		return true, nil
+	})
+	return serviceName, err
 }
 
 // serviceNameFromOrder extracts the service name from a delivered order's
@@ -419,43 +451,30 @@ func (t *TargetPlugin) reinstallServer(ctx context.Context, serviceName string, 
 func (t *TargetPlugin) waitForTask(ctx context.Context, serviceName string, taskId int64) error {
 	endpoint := fmt.Sprintf("/dedicated/server/%s/task/%d",
 		url.PathEscape(serviceName), taskId)
-	timeout := 60 * time.Minute
-	interval := 10 * time.Second
 
-	deadline := time.Now().Add(timeout)
-	for {
-		if time.Now().After(deadline) {
-			return fmt.Errorf("task %d timed out after %v", taskId, timeout)
-		}
-
+	return poll(ctx, taskTimeout, taskPollInterval, func() (bool, error) {
 		task := &ovhTask{}
 		if err := t.ovh.GetWithContext(ctx, endpoint, task); err != nil {
 			// OVH API occasionally returns 404/500 for in-flight tasks.
 			if errOvh, ok := err.(*ovh.APIError); ok && (errOvh.Code == 404 || errOvh.Code == 500) {
 				t.logger.Debug("transient error polling task, retrying",
 					"task_id", taskId, "error", err)
-			} else {
-				return fmt.Errorf("polling task %d: %v", taskId, err)
+				return false, nil
 			}
-		} else {
-			t.logger.Debug("task status", "task_id", taskId, "status", task.Status)
-
-			switch task.Status {
-			case "done":
-				return nil
-			case "error", "cancelled":
-				return fmt.Errorf("task %d ended with status %q: %s", taskId, task.Status, task.Comment)
-			default:
-				// init, todo, doing — keep polling.
-			}
+			return false, fmt.Errorf("polling task %d: %v", taskId, err)
 		}
 
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(interval):
+		t.logger.Debug("task status", "task_id", taskId, "status", task.Status)
+
+		switch task.Status {
+		case "done":
+			return true, nil
+		case "error", "cancelled":
+			return false, fmt.Errorf("task %d ended with status %q: %s", taskId, task.Status, task.Comment)
+		default:
+			return false, nil // init, todo, doing — keep polling.
 		}
-	}
+	})
 }
 
 // terminateServer requests termination of an OVH dedicated server and
@@ -502,10 +521,6 @@ func (t *TargetPlugin) terminateServer(ctx context.Context, serviceName string) 
 // waitForTerminationToken polls OVH notification emails for the termination
 // confirmation link and extracts the token from it.
 func (t *TargetPlugin) waitForTerminationToken(ctx context.Context, serviceName string, oldIds []int64) (string, error) {
-	timeout := 30 * time.Minute
-	interval := 10 * time.Second
-	deadline := time.Now().Add(timeout)
-
 	// The last old ID serves as the watermark — only check newer emails.
 	var watermark int64
 	if len(oldIds) > 0 {
@@ -514,28 +529,25 @@ func (t *TargetPlugin) waitForTerminationToken(ctx context.Context, serviceName 
 
 	matches := []string{serviceName, "/billing/confirmTerminate"}
 
-	for {
-		if time.Now().After(deadline) {
-			return "", fmt.Errorf("timed out waiting for termination email after %v", timeout)
-		}
-
+	var token string
+	err := poll(ctx, emailTimeout, emailPollInterval, func() (bool, error) {
 		email, err := t.findNewNotificationEmail(ctx, watermark, matches)
 		if err != nil {
 			t.logger.Debug("error checking notification emails, retrying", "error", err)
-		} else if email != nil {
-			tokenMatch := reTerminateToken.FindStringSubmatch(email.Body)
-			if len(tokenMatch) != 2 {
-				return "", fmt.Errorf("could not extract termination token from email %d", email.Id)
-			}
-			return tokenMatch[1], nil
+			return false, nil
+		}
+		if email == nil {
+			return false, nil
 		}
 
-		select {
-		case <-ctx.Done():
-			return "", ctx.Err()
-		case <-time.After(interval):
+		tokenMatch := reTerminateToken.FindStringSubmatch(email.Body)
+		if len(tokenMatch) != 2 {
+			return false, fmt.Errorf("could not extract termination token from email %d", email.Id)
 		}
-	}
+		token = tokenMatch[1]
+		return true, nil
+	})
+	return token, err
 }
 
 // notificationEmailIds returns sorted IDs of existing notification emails.
