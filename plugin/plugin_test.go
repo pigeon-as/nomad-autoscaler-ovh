@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/hashicorp/nomad/api"
+	"github.com/shoenig/test/must"
 )
 
 func TestCalculateDirection(t *testing.T) {
@@ -31,12 +32,8 @@ func TestCalculateDirection(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			num, dir := p.calculateDirection(tt.current, tt.desired)
-			if num != tt.wantNum {
-				t.Errorf("num = %d, want %d", num, tt.wantNum)
-			}
-			if dir != tt.wantDir {
-				t.Errorf("dir = %q, want %q", dir, tt.wantDir)
-			}
+			must.EqOp(t, tt.wantNum, num)
+			must.EqOp(t, tt.wantDir, dir)
 		})
 	}
 }
@@ -86,17 +83,11 @@ func TestOvhNodeIDMap(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			got, err := ovhNodeIDMap(tt.node)
 			if tt.wantErr {
-				if err == nil {
-					t.Fatal("expected error, got nil")
-				}
+				must.Error(t, err)
 				return
 			}
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if got != tt.want {
-				t.Errorf("got %q, want %q", got, tt.want)
-			}
+			must.NoError(t, err)
+			must.EqOp(t, tt.want, got)
 		})
 	}
 }
@@ -120,9 +111,7 @@ func TestGetConfigValue(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := getConfigValue(tt.config, tt.key, tt.default_)
-			if got != tt.want {
-				t.Errorf("got %q, want %q", got, tt.want)
-			}
+			must.EqOp(t, tt.want, got)
 		})
 	}
 }
@@ -169,14 +158,10 @@ func TestValidatePluginConfig(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			err := validatePluginConfig(tt.config)
 			if tt.wantErr {
-				if err == nil {
-					t.Fatal("expected error, got nil")
-				}
+				must.Error(t, err)
 				return
 			}
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
+			must.NoError(t, err)
 		})
 	}
 }
