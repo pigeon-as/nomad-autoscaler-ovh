@@ -452,7 +452,7 @@ func (t *TargetPlugin) waitForTask(ctx context.Context, serviceName string, task
 	endpoint := fmt.Sprintf("/dedicated/server/%s/task/%d",
 		url.PathEscape(serviceName), taskId)
 
-	return poll(ctx, taskTimeout, taskPollInterval, func() (bool, error) {
+	err := poll(ctx, taskTimeout, taskPollInterval, func() (bool, error) {
 		task := &ovhTask{}
 		if err := t.ovh.GetWithContext(ctx, endpoint, task); err != nil {
 			// OVH API occasionally returns 404/500 for in-flight tasks.
@@ -475,6 +475,10 @@ func (t *TargetPlugin) waitForTask(ctx context.Context, serviceName string, task
 			return false, nil // init, todo, doing — keep polling.
 		}
 	})
+	if err != nil {
+		return fmt.Errorf("task %d: %w", taskId, err)
+	}
+	return nil
 }
 
 // terminateServer requests termination of an OVH dedicated server and
