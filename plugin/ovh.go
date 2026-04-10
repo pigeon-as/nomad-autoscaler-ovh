@@ -461,7 +461,7 @@ func (t *TargetPlugin) waitForTask(ctx context.Context, serviceName string, task
 					"task_id", taskId, "error", err)
 				return false, nil
 			}
-			return false, fmt.Errorf("polling task %d: %v", taskId, err)
+			return false, fmt.Errorf("polling: %v", err)
 		}
 
 		t.logger.Debug("task status", "task_id", taskId, "status", task.Status)
@@ -470,7 +470,7 @@ func (t *TargetPlugin) waitForTask(ctx context.Context, serviceName string, task
 		case "done":
 			return true, nil
 		case "error", "cancelled":
-			return false, fmt.Errorf("task %d ended with status %q: %s", taskId, task.Status, task.Comment)
+			return false, fmt.Errorf("ended with status %q: %s", task.Status, task.Comment)
 		default:
 			return false, nil // init, todo, doing — keep polling.
 		}
